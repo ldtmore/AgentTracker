@@ -1,0 +1,39 @@
+# AgentTracker
+
+> 主流 AI Agent 的旁路观测台:灵动岛实时监控各 Agent 工作状态,统计大模型 token 消耗与额度——只看,不碰。
+
+[![status](https://img.shields.io/badge/status-M0_开发中(T0–T6_数据层完成)-blue)](docs/PLAN.md)
+[![tauri](https://img.shields.io/badge/Tauri-2-orange)](https://tauri.app)
+[![rust](https://img.shields.io/badge/Rust-stable-success)](https://www.rust-lang.org)
+
+## 这是什么
+
+一个 Windows 优先的轻量桌面工具,提供:
+
+- 🏝️ **灵动岛状态监控** — 颜色状态灯实时显示各 Agent(工作中/已完成/等待输入/出错),悬浮展开多 Agent 详情,点击跳转对应终端窗口
+- 💰 **用量与额度统计** — token 消耗按供应商/模型/时间统计;订阅额度(如 GLM Coding Plan 的 5 小时/每周窗口)实时显示用量百分比与重置倒计时
+- 📊 **报表页**(M1)— 趋势图、热力图、按模型/供应商聚合
+
+## 设计哲学:观测台,不是网关
+
+本项目是纯旁路观测工具,遵守 [开发宪法](AGENTS.md) 五条红线:
+
+1. **纯只读** — 不代理、不改请求、不碰模型流量
+2. **故障隔离** — 工具挂了/卸载了,Agent 照常工作,零感知
+3. **顺序无关** — 后开工具也能回溯补录历史数据
+4. **渐进降级** — hooks → 文件监听 → 进程监控,层层兜底
+5. **不抢焦点** — 默认静默,打扰一律 opt-in
+
+## 技术栈
+
+Tauri 2 · Rust · React + TypeScript · SQLite(rusqlite)· ECharts
+
+## 文档
+
+- [开发宪法](AGENTS.md) — 定位与红线,贡献前必读
+- [协作工作流](docs/WORKFLOW.md) — 三阶段流程与多 Agent 交接规则
+- [项目计划 v1(草案归档)](docs/PLAN.md) — 早期 M0 设计,阶段 2 将产出正式方案取代
+
+## License
+
+未定(开源发布前确定)
