@@ -53,7 +53,6 @@ struct TranscriptLine {
     /// 同消息多 requestId = 多次真实 API 调用(重试/恢复重发),各自计消耗
     #[serde(rename = "requestId")]
     request_id: Option<String>,
-    cwd: Option<String>,
 }
 
 pub struct ClaudeCodeAdapter {
@@ -95,13 +94,26 @@ impl ClaudeCodeAdapter {
             .unwrap_or(0)
     }
 
-    /// 项目目录名解码:目录名把路径分隔符编码为 '-'
-    /// (如 "D--Windows-Terminal" → "D:\\Windows-Terminal";小写盘符无法完美还原,仅作展示)
-    fn decode_project_dir(dir_name: &str) -> Option<String> {
-        if dir_name.is_empty() {
-            return None;
+    /// 从转录文件头部(≤8KB)提取首个带 cwd 的行,得到真实项目路径(R2)。
+    /// 展示与窗口跳转匹配都依赖真实路径(编码目录名无法与窗口标题匹配);
+    /// 头部无 cwd(罕见,如全是 summary 行)时由调用方退回编码目录名。
+    fn first_cwd(path: &std::path::Path) -> Option<String> {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path).ok()?;
+        let mut buf = vec![0u8; 8192];
+        let n = f.read(&mut buf).ok()?;
+        let head = String::from_utf8_lossy(&buf[..n]);
+        for line in head.lines() {
+            let Ok(j) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue; // 头部截断的半行等,跳过
+            };
+            if let Some(cwd) = j.get("cwd").and_then(|c| c.as_str()) {
+                if !cwd.is_empty() {
+                    return Some(cwd.to_string());
+                }
+            }
         }
-        Some(dir_name.to_string())
+        None
     }
 }
 
@@ -129,11 +141,14 @@ impl AgentAdapter for ClaudeCodeAdapter {
             if session_id.is_empty() {
                 continue;
             }
-            let project = f
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|n| n.to_str())
-                .and_then(Self::decode_project_dir);
+            // 项目目录:优先转录行内真实 cwd(R2);取不到退回编码目录名(仅展示兜底)
+            let project =
+                Self::first_cwd(&f).or_else(|| {
+                    f.parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .map(|s| s.to_string())
+                });
             out.push(SessionInfo {
                 id: format!("claude-code:{session_id}"),
                 agent: "claude-code".into(),
@@ -418,6 +433,30 @@ mod tests {
         assert_eq!(s2["statusLine"]["type"], "command");
         // 备份文件存在
         assert!(dir.read_dir().unwrap().any(|f| f.unwrap().file_name().to_string_lossy().starts_with("settings.json.bak-at-")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// R2:转录头部 cwd 提取(真实路径;含 summary 行/截断半行容错)
+    #[test]
+    fn test_first_cwd() {
+        let dir = std::env::temp_dir().join(format!("at-r2-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("s.jsonl");
+        std::fs::write(&file, concat!(
+            r#"{"type":"summary","summary":"无 cwd 的行应跳过"}"#, "\n",
+            r#"{"type":"user","cwd":"F:\\MyProjectRepository\\AgentTracker","timestamp":"2026-09-16T10:00:00.000Z"}"#, "\n",
+            r#"{"type":"user","cwd":"F:\\另一个目录不应被选中"}"#, "\n"
+        )).unwrap();
+        assert_eq!(
+            ClaudeCodeAdapter::first_cwd(&file).as_deref(),
+            Some("F:\\MyProjectRepository\\AgentTracker")
+        );
+        // 全部无 cwd:None(调用方退回编码目录名)
+        let f2 = dir.join("empty.jsonl");
+        std::fs::write(&f2, r#"{"type":"summary"}"#).unwrap();
+        assert_eq!(ClaudeCodeAdapter::first_cwd(&f2), None);
+        // 文件不存在:None
+        assert_eq!(ClaudeCodeAdapter::first_cwd(&dir.join("nope.jsonl")), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

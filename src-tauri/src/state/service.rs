@@ -11,13 +11,16 @@ use crate::collector::zcode::ZcodeAdapter;
 use crate::collector::AgentAdapter;
 use crate::provider::glm::GlmProvider;
 use crate::provider::ProviderAdapter;
-use crate::state::{aggregate, compute_state, IslandState, SessionSignals, SessionState};
+use crate::state::{
+    aggregate, compute_state, ERROR_FRESH_MS, IslandState, SessionSignals, SessionState,
+};
 use crate::store::Store;
 
 /// 额度刷新间隔(毫秒)
 const QUOTA_REFRESH_MS: i64 = 5 * 60 * 1000;
-/// 错误信号的持续窗口(与 state 模块一致)
-const ERROR_FRESH_MS: i64 = 10 * 60 * 1000;
+/// 水位安全余量(毫秒,R4):并发会话慢刷盘的行 ts 可能略小于其他会话推进的
+/// 全局水位,按原始水位过滤会永久丢行;回退 60s 重采,幂等键保证不重复入库
+const WATERMARK_MARGIN_MS: i64 = 60 * 1000;
 
 /// 展示用会话视图(serde 给前端)
 #[derive(Debug, Clone, serde::Serialize)]
@@ -99,9 +102,20 @@ impl Aggregator {
         let mut last_hooks: HashMap<String, (String, i64, Option<String>)> = HashMap::new();
         if let Some(path) = hook_events::events_file_path() {
             let (events, new_off) = hook_events::read_events(&path, self.hook_offset);
+            // 偏移无推进时免写库(R9,每 10s 一次的空写没必要)
+            if new_off != self.hook_offset {
+                self.store.set_setting("hook_events_offset", &new_off.to_string());
+            }
             self.hook_offset = new_off;
-            self.store.set_setting("hook_events_offset", &new_off.to_string());
             for ev in events {
+                // 原始事件审计落库 status_events(02-DESIGN §3,R7)
+                self.store.insert_status_event(
+                    "claude-code",
+                    Some(ev.session_id.as_str()),
+                    &ev.hook,
+                    &serde_json::to_string(&ev).unwrap_or_default(),
+                    ev.ts,
+                );
                 // 每会话保留最新事件
                 last_hooks
                     .entry(ev.session_id.clone())
@@ -128,8 +142,11 @@ impl Aggregator {
             } else {
                 &self.cc
             };
-            // 增量用量入库 + 水位推进
-            let watermark = self.store.get_watermark(agent_id);
+            // 增量用量入库 + 水位推进(水位带 60s 安全余量,R4)
+            let watermark = self
+                .store
+                .get_watermark(agent_id)
+                .saturating_sub(WATERMARK_MARGIN_MS);
             let usage = adapter.collect_usage(watermark).unwrap_or_default();
             self.store.insert_usage(&usage);
             if let Some(max_ts) = usage.iter().map(|u| u.ts).max() {
@@ -175,7 +192,11 @@ impl Aggregator {
                 views.push(SessionView {
                     id: info.id.clone(),
                     agent: agent_id.to_string(),
-                    model: info.model.clone(),
+                    // Claude Code scan 阶段拿不到 model,从自库最近一次调用兜底回填(R1)
+                    model: info
+                        .model
+                        .clone()
+                        .or_else(|| self.store.latest_session_model(&info.id)),
                     project_dir: info.project_dir.clone(),
                     title: info.title.clone(),
                     state,
@@ -236,7 +257,18 @@ fn probe_processes() -> (bool, bool) {
         if n.contains("zcode") {
             z = true;
         }
-        if n.contains("claude") {
+        // claude CLI 是 npm shim,真实进程名为 node.exe,名字不含 claude(R3),
+        // 须查命令行;claude-menu(菜单工具)与本工具自身不算;原生 exe 形态名字即命中
+        let cmd = proc
+            .cmd()
+            .iter()
+            .map(|a| a.to_string_lossy())
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if (n.contains("claude") || cmd.contains("claude"))
+            && !cmd.contains("claude-menu")
+            && !cmd.contains("agenttracker")
+        {
             c = true;
         }
         if z && c {

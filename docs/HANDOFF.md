@@ -3,23 +3,27 @@
 > 任何 Agent/人接手前必读(顺序:AGENTS.md → WORKFLOW.md → 本文件 → 03-TASKS.md)
 > 维护规则:每完成一个任务或结束一次会话,更新本文件
 
-## 当前状态(2026-09-16)
+## 当前状态(2026-09-16 晚,第二次会话更新)
 
-- **阶段**:阶段 3(实施)进行中,进度 **T0–T7 ✅(8/14)——数据+状态层全部就绪**
-- ✅ T0–T6 见前次记录(数据层五件套:存储/ZCode/ClaudeCode/GLM/hooks)
-- ✅ T7 状态聚合器:state/{mod,service}.rs;单测 13/13+集成 7/7;
-  e2e 实测 46 会话/岛 AnyError(额度100%标红)/ZCode 47M tokens;
-  关键教训:hooks 事件窗口(30min)必须>看门狗(5min)
-- git:首次提交已推送 GitHub(ldtmore/AgentTracker,main);T7 之后的提交待所有者指示
+- **阶段**:阶段 3(实施)进行中,进度 **T0–T9、T11 ✅;T10 🟨(ZCode 跳转 ✅,WT 未命中搁置);
+  T12 ⏸(所有者指示:先完成代码细节调整);T13 ⬜**
+- ✅ T8 岛壳/T9 展开面板/T10 点击跳转(部分)/T11 设置页——验收记录见 03-TASKS.md 对应条目
+- git:T0–T11 的 4 个提交 + 本次审查修复提交,均已推送 GitHub(ldtmore/AgentTracker,main)
+- 本次会话:①需求完成度核对——M0 功能代码全部就绪,缺口仅"阈值可配未生效(R5)"+WT 跳转+T12 打包;
+  ②全量代码审查(14 项发现)并按所有者勾选修复 12 项(R1–R5/R7–R12/R14;R6 文件级增量、
+  R13 CSP 明确不做):CC 模型兜底回填/转录 cwd 真实路径/进程探测改命令行判定/水位 60s 安全余量/
+  hook 事件审计落库/死代码清理/hook 偏移免写/阈值接线+校验/收缩态"累计"前缀/模板残留/跳转诊断日志。
+  验证:cargo 单测 14/14 + 真实数据集成 3/3 + 零警告 + npm build 通过
+- 注意:项目实际路径为 F:\MyProjectRepository\AgentTracker(旧文档中 F:\AgentTracker 为历史写法)
 
 ## 下一步
 
-**T8 岛 UI-壳**:tauri.conf.json 主窗改岛形态(decorations:false/always_on_top/skip_taskbar/
-transparent/resizable:false/shadow:false)+ window-vibrancy Acrylic + 默认顶部居中(计算
-workArea)+ 拖拽记忆(app_settings 存坐标)+ 托盘菜单;lib.rs setup 里 spawn 后台线程 10s tick
-调 Aggregator,emit "island-snapshot" 事件给前端。
-之后 T9 岛 UI-内容(React 组件消费快照)。
-环境提醒:cargo 带 RUSTUP_HOME/CARGO_HOME/PATH,外网 HTTPS_PROXY,Bash 显式 cd /f/AgentTracker。
+1. 所有者 tauri dev 屏幕复核两处 UI(踩坑铁律:UI 改动以真实渲染为验收):
+   收缩态 token 显示"累计"前缀;阈值变色(设置页改阈值保存后需重启应用生效)
+2. 恢复 T12(release 构建 + 性能实测 + 红线回归 + 便携 zip)
+3. T10 WT 跳转:R2 已修(project_dir 为真实路径),按待议区线索 + R14 诊断输出重启调试
+环境提醒:cargo 带 RUSTUP_HOME/CARGO_HOME/PATH,外网走本机代理 127.0.0.1:6478,
+Bash 显式 cd 到项目目录。
 
 ## 关键背景(新接手者必读)
 
@@ -32,6 +36,9 @@ workArea)+ 拖拽记忆(app_settings 存坐标)+ 托盘菜单;lib.rs setup 里 s
 
 ## 踩坑记录
 
+- **项目迁移目录坑(2026-09-16 验证实测)**:target/ 构建缓存嵌旧绝对路径(F:\AgentTracker),
+  目录变更后 tauri 构建脚本报"系统找不到指定的路径"(指向旧盘符路径)——`cargo clean`
+  全量重建即可恢复(约 6 分钟)
 - **UI 三连坑(T8 实战)**:①写前端文件路径勿多一层(曾误写 src/src/App.tsx 导致 vite 一直服务模板——Write 成功≠路径正确,**UI 改动必须以屏幕真实渲染为验收**);②window-vibrancy/Acrylic 是**窗口级**效果,整个矩形窗口变磨砂灰,胶囊形态必须"窗口全透明+CSS 自绘背景"(依赖保留未用);③tauri dev 用 TaskStop 后 agenttracker.exe 与 vite 可能残留并占 1420 端口,重启 dev 前先 taskkill + 清端口
 - **Claude Code JSONL 数据知识(T4 实测)**:同一 assistant 消息平均重复 ~3 次(流式快照/会话恢复复制),必须按 messageId(+requestId)去重并保留用量最大快照;`<synthetic>` 行是本地合成消息(usage 全 0)须过滤;`cost-state` 行是会话级累计快照(ccusage 纳入、我们没有,对账差 1.7% 的来源);本机数据无 requestId 字段;**集成测试勿断言"增量采集为空"**(活跃会话在写入,竞态必挂,容忍 ≤5 行)——对账详情见 01-RESEARCH §8
 - **参考工具优先**:遇到解析/口径问题先看调研存档 E:\AIAgentTemp\AgentTracker-research\(better-ccusage/ccusage/glm-quota-line 源码),别自己盲试变体

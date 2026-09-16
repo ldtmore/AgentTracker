@@ -112,7 +112,9 @@ fn discover_from_suppliers() -> Option<GlmCreds> {
 
 #[derive(serde::Deserialize)]
 struct QuotaResponse {
+    /// 应答成功标志(当前解析只看 data;字段留档便于排查接口异常)
     #[serde(default)]
+    #[allow(dead_code)]
     success: bool,
     data: Option<QuotaData>,
 }

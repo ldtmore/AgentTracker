@@ -83,10 +83,19 @@ pub fn find_session_window(agent: &str, project_dir: Option<&str>) -> Option<isi
 
     // ④ Agent 关键词兜底:zcode 桌面窗口 / claude 终端
     let keyword = if agent == "zcode" { "zcode" } else { "claude" };
-    windows
+    let hit = windows
         .iter()
         .find(|(_, t, _)| t.to_ascii_lowercase().contains(keyword))
-        .map(|(h, _, _)| *h)
+        .map(|(h, _, _)| *h);
+    if hit.is_none() {
+        // 跳转未命中诊断(T10 调试线索,R14):dev 控制台可见;release 无控制台自然静默
+        eprintln!("[focus] 未命中 agent={agent} project_dir={project_dir:?},当前可见窗口:");
+        for (h, t, pid) in windows.iter().take(40) {
+            let title: String = t.chars().take(60).collect();
+            eprintln!("[focus]   hwnd={h} pid={pid} title={title}");
+        }
+    }
+    hit
 }
 
 /// 在跑 claude 的终端进程 → 其(祖先)顶层窗口
@@ -132,8 +141,10 @@ fn find_terminal_running_claude(windows: &[(isize, String, u32)]) -> Option<isiz
         }
     }
     if wanted_pids.is_empty() {
+        eprintln!("[focus] 进程链未找到在跑 claude 的终端进程(T10 调试,R14)");
         return None;
     }
+    eprintln!("[focus] 在跑 claude 的候选进程 PID: {:?}", wanted_pids);
     // 窗口按 PID 命中(优先标题最长的,避免 "Default" 之类空壳)
     let mut hits: Vec<&(isize, String, u32)> = windows
         .iter()

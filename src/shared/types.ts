@@ -42,6 +42,12 @@ export interface IslandSnapshot {
   generated_at: number;
 }
 
+/** 额度提醒阈值(设置页存储,前端启动时加载;默认 80/95) */
+export interface Thresholds {
+  warn: number;
+  danger: number;
+}
+
 /** 会话状态 → 状态点 class 与中文标签 */
 export const SESSION_META: Record<SessionState, { dot: string; label: string }> = {
   online: { dot: "dot-gray", label: "在线" },

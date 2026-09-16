@@ -1,7 +1,7 @@
 /**
  * 收缩态胶囊:状态灯 + 摘要文案 + token 缩写;整条可拖拽
  */
-import type { IslandSnapshot } from "../shared/types";
+import type { IslandSnapshot, Thresholds } from "../shared/types";
 import { fmtTokens } from "../shared/types";
 
 const ISLAND_META: Record<
@@ -15,14 +15,24 @@ const ISLAND_META: Record<
   any_error: { dot: "dot-red pulse", label: "出错 / 额度耗尽" },
 };
 
-/** 额度百分比对应的警示等级(静默提醒:80% 琥珀 / 95% 红,M0 固定阈值) */
-export function quotaLevel(pct: number): "normal" | "warn" | "danger" {
-  if (pct >= 95) return "danger";
-  if (pct >= 80) return "warn";
+/** 额度百分比对应的警示等级(阈值来自设置页,R5;静默提醒,不弹窗不出声) */
+export function quotaLevel(
+  pct: number,
+  warn: number,
+  danger: number,
+): "normal" | "warn" | "danger" {
+  if (pct >= danger) return "danger";
+  if (pct >= warn) return "warn";
   return "normal";
 }
 
-export default function IslandBar({ snap }: { snap: IslandSnapshot | null }) {
+export default function IslandBar({
+  snap,
+  thresholds,
+}: {
+  snap: IslandSnapshot | null;
+  thresholds: Thresholds;
+}) {
   const meta = snap ? ISLAND_META[snap.island] : ISLAND_META.no_sessions;
   const working = snap?.sessions.filter((s) => s.state === "working").length ?? 0;
   const total = snap?.sessions.length ?? 0;
@@ -31,7 +41,7 @@ export default function IslandBar({ snap }: { snap: IslandSnapshot | null }) {
   );
   const q5hPct = q5h?.used_percent;
   const quotaCls =
-    q5hPct != null ? ` quota-${quotaLevel(q5hPct)}` : "";
+    q5hPct != null ? ` quota-${quotaLevel(q5hPct, thresholds.warn, thresholds.danger)}` : "";
 
   return (
     <div className="island" data-tauri-drag-region>
@@ -48,7 +58,7 @@ export default function IslandBar({ snap }: { snap: IslandSnapshot | null }) {
       )}
       {snap && snap.sessions.length > 0 && (
         <span className="island-tokens" data-tauri-drag-region>
-          {fmtTokens(snap.sessions.reduce((a, s) => a + s.session_tokens, 0))}
+          累计 {fmtTokens(snap.sessions.reduce((a, s) => a + s.session_tokens, 0))}
         </span>
       )}
     </div>

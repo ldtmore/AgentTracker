@@ -144,7 +144,10 @@
 - 内容:红线回归(A6:退出/卸载工具后两 Agent 无报错)+ 性能(A5:内存≤100MB、冷启动≤2s)+
   便携 zip(release 产物+首次运行说明)
 - 已完成:bundle 配置改为 active=false(纯 release exe,不出安装包)
-- 待恢复:release 构建 + 性能实测 + 红线回归 + zip
+- ✅ 已完成(2026-09-16 晚):T12 前置的代码细节调整——所有者勾选 12 项
+  (R1–R5/R7–R12/R14;R6 文件级增量与 R13 CSP 明确不做)全部落地并验证:
+  单测 14/14 + 真实数据集成 3/3 + cargo 零警告 + npm build 通过
+- 待恢复:所有者 dev 屏幕复核两处 UI(累计前缀/阈值变色)→ release 构建 + 性能实测 + 红线回归 + zip
 - 依赖:T3–T11(T10 部分完成已获所有者接受)
 
 ### T13 Dogfood 周 ⬜
@@ -159,7 +162,9 @@
   但所有者环境(Windows Terminal + PowerShell 7)进程链匹配未命中。下次调试线索:
   ①打印 WT 进程树(pwsh 的父链是 WindowsTerminal.exe 还是经 OpenConsole/conhost 中转);
   ②确认 sysinfo 能否读到 WT 子进程 cmdline(UWP 权限);③考虑改用窗口类名
-  (WindowsTerminal 的类 CASCADIA_HOSTING_WINDOW_CLASS)兜底
+  (WindowsTerminal 的类 CASCADIA_HOSTING_WINDOW_CLASS)兜底。
+  **2026-09-16 晚更新**:project_dir 已改为转录 cwd 真实路径(R2),标题匹配①②不再是必败;
+  find_session_window 未命中时向 stderr 打印窗口清单与候选 PID(R14),dev 控制台可见
 
 ## 交接锚点
 

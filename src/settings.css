@@ -14,6 +14,25 @@
   gap: 14px;
 }
 
+/* 滚动条:与灵动岛展开面板(panel-sessions)同款——6px 细条半透明,
+   悬停加亮;轨道透明融入深色背景 */
+.st-root::-webkit-scrollbar {
+  width: 6px;
+}
+
+.st-root::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.st-root::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.st-root::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
 .st-header {
   margin: 0;
   font-size: 16px;

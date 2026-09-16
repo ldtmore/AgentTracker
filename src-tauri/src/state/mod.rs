@@ -61,8 +61,8 @@ const WATCHDOG_MS: i64 = 5 * 60 * 1000;
 const HOOK_FRESH_MS: i64 = 30 * 60 * 1000;
 /// 活动启发式窗口:最近 usage/文件写入在此窗口内视为工作中(毫秒)
 const ACTIVITY_FRESH_MS: i64 = 90 * 1000;
-/// 错误信号的持续窗口(毫秒):窗口外的历史错误不再标红
-const ERROR_FRESH_MS: i64 = 10 * 60 * 1000;
+/// 错误信号的持续窗口(毫秒):窗口外的历史错误不再标红(service 层复用)
+pub(crate) const ERROR_FRESH_MS: i64 = 10 * 60 * 1000;
 
 /// 单会话状态判定的输入信号(三级数据源的快照)
 #[derive(Debug, Clone, Default)]
@@ -75,16 +75,15 @@ pub struct SessionSignals {
     pub last_activity_at: Option<i64>,
     /// ZCode model_usage 的最近 error_type(毫秒, 字符串)
     pub recent_error: Option<(i64, String)>,
-    /// 供应商额度是否已耗尽(100%)
-    pub quota_exhausted: bool,
     /// Agent 进程是否在运行(L0 兜底)
     pub process_alive: bool,
 }
 
 /// 计算单会话状态(纯函数;now 为当前毫秒)
 ///
-/// 优先级:error(限流消息/最近错误/额度耗尽)> hooks 事件 > 活动启发式 > 进程枚举。
+/// 优先级:error(限流消息/最近错误)> hooks 事件 > 活动启发式 > 进程枚举。
 /// 看门狗:hooks 给出 working 但超 WATCHDOG_MS 无任何新信号 → 回落 idle。
+/// 注:额度耗尽(5h 100%)的标红由 service 层在快照组装后统一后处理(产品口径)。
 pub fn compute_state(sig: &SessionSignals, now: i64) -> SessionState {
     // ① error 判定(不受看门狗影响)
     if let Some(msg) = sig.notification_message.as_deref() {
@@ -96,9 +95,6 @@ pub fn compute_state(sig: &SessionSignals, now: i64) -> SessionState {
         if now - ts <= ERROR_FRESH_MS {
             return SessionState::Error;
         }
-    }
-    if sig.quota_exhausted {
-        return SessionState::Error;
     }
 
     let last_signal = sig
@@ -190,10 +186,6 @@ mod tests {
         assert_eq!(compute_state(&s2, NOW), SessionState::Error);
         s2.recent_error = Some((NOW - ERROR_FRESH_MS - 1, "api_error".into()));
         assert_eq!(compute_state(&s2, NOW), SessionState::Offline);
-        // 额度耗尽 → error
-        let mut s3 = sig();
-        s3.quota_exhausted = true;
-        assert_eq!(compute_state(&s3, NOW), SessionState::Error);
     }
 
     #[test]

@@ -5,10 +5,10 @@
 
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-/// 一条 hook 状态事件
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+/// 一条 hook 状态事件(Serialize 供审计落库 status_events)
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct HookEvent {
     pub ts: i64,
     pub hook: String,

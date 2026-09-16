@@ -227,6 +227,19 @@ impl Store {
         }
     }
 
+    /// 某会话最近一次调用所用模型(Claude Code 的 scan 阶段拿不到 model,展示时兜底回填)
+    pub fn latest_session_model(&self, session_id: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT model FROM usage_records WHERE session_id = ?1 ORDER BY ts DESC LIMIT 1",
+            params![session_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
     /// 查会话元数据(project_dir/agent),跳转窗口用
     pub fn get_session_meta(&self, id: &str) -> Option<(String, Option<String>)> {
         let conn = self.conn.lock().unwrap();

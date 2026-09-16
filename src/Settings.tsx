@@ -4,6 +4,7 @@
  */
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import "./settings.css";
 
 /** 数据清理周期选项(天;0=永不清理) */
@@ -57,6 +58,18 @@ export default function Settings() {
   }, []);
 
   const save = async () => {
+    // 阈值校验(R11):0–100 的数字,且琥珀阈值须小于红色阈值
+    const w = Number(warn);
+    const d = Number(danger);
+    const inRange = (v: number) => Number.isFinite(v) && v > 0 && v <= 100;
+    if (!inRange(w) || !inRange(d)) {
+      setMsg("保存失败:阈值须为 0–100 的数字");
+      return;
+    }
+    if (w >= d) {
+      setMsg("保存失败:琥珀提醒阈值须小于红色告警阈值");
+      return;
+    }
     try {
       const kv: [string, string][] = [
         ["glm_base", glmBase],
@@ -67,6 +80,10 @@ export default function Settings() {
       ];
       for (const [k, v] of kv) await invoke("set_setting", { key: k, value: v });
       setMsg("已保存;凭据与阈值将在重启应用后生效");
+      // 保存成功自动关闭设置窗口(hide:托盘可再次唤起);稍作停留让提示可感知
+      setTimeout(() => {
+        getCurrentWebviewWindow().hide().catch(() => {});
+      }, 600);
     } catch (e) {
       setMsg(`保存失败:${e}`);
     }

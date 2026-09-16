@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { IslandSnapshot, SessionView } from "../shared/types";
+import type { IslandSnapshot, SessionView, Thresholds } from "../shared/types";
 import { SESSION_META, fmtCountdown, fmtTokens } from "../shared/types";
 import { quotaLevel } from "./IslandBar";
 
@@ -58,10 +58,12 @@ function QuotaLine({
   label,
   usedPercent,
   resetAt,
+  thresholds,
 }: {
   label: string;
   usedPercent: number | null;
   resetAt: number | null;
+  thresholds: Thresholds;
 }) {
   // 倒计时本地每 30 秒推进一次(快照本身 10s 一刷)
   const [, force] = useState(0);
@@ -70,7 +72,10 @@ function QuotaLine({
     return () => clearInterval(t);
   }, []);
   const pct = usedPercent != null ? Math.min(100, Math.max(0, usedPercent)) : 0;
-  const level = usedPercent != null ? quotaLevel(pct) : "normal";
+  const level =
+    usedPercent != null
+      ? quotaLevel(pct, thresholds.warn, thresholds.danger)
+      : "normal";
   return (
     <div className="quota-line">
       <span className="quota-label">{label}</span>
@@ -83,7 +88,13 @@ function QuotaLine({
   );
 }
 
-export default function Panel({ snap }: { snap: IslandSnapshot }) {
+export default function Panel({
+  snap,
+  thresholds,
+}: {
+  snap: IslandSnapshot;
+  thresholds: Thresholds;
+}) {
   const sessions = sortSessions(snap.sessions).slice(0, 30);
   const q5h = snap.quotas.find(
     (q) => q.provider === "glm" && q.window_kind === "5h",
@@ -107,8 +118,8 @@ export default function Panel({ snap }: { snap: IslandSnapshot }) {
       </div>
       <div className="panel-quota">
         <div className="panel-title">GLM Coding Plan</div>
-        <QuotaLine label="5 小时" usedPercent={q5h?.used_percent ?? null} resetAt={q5h?.reset_at ?? null} />
-        <QuotaLine label="每 周" usedPercent={qWeek?.used_percent ?? null} resetAt={qWeek?.reset_at ?? null} />
+        <QuotaLine label="5 小时" usedPercent={q5h?.used_percent ?? null} resetAt={q5h?.reset_at ?? null} thresholds={thresholds} />
+        <QuotaLine label="每 周" usedPercent={qWeek?.used_percent ?? null} resetAt={qWeek?.reset_at ?? null} thresholds={thresholds} />
       </div>
     </div>
   );
