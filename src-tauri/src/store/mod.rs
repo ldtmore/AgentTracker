@@ -187,6 +187,46 @@ impl Store {
         );
     }
 
+    /// 某会话的累计 token(input+output,展示口径)
+    pub fn session_usage_total(&self, session_id: &str) -> i64 {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0)
+             FROM usage_records WHERE session_id = ?1",
+            params![session_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    }
+
+    /// 每个供应商+窗口的最新额度快照
+    pub fn latest_quotas(&self) -> Vec<QuotaRow> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = match conn.prepare(
+            "SELECT provider, window_kind, used_percent, used_tokens, reset_at, fetched_at
+             FROM quota_snapshots q
+             WHERE id = (SELECT MAX(id) FROM quota_snapshots
+                          WHERE provider=q.provider AND window_kind=q.window_kind)",
+        ) {
+            Ok(s) => s,
+            Err(_) => return vec![],
+        };
+        let rows = stmt.query_map([], |r| {
+            Ok(QuotaRow {
+                provider: r.get(0)?,
+                window_kind: r.get(1)?,
+                used_percent: r.get(2)?,
+                used_tokens: r.get(3)?,
+                reset_at: r.get(4)?,
+                fetched_at: r.get(5)?,
+            })
+        });
+        match rows {
+            Ok(it) => it.filter_map(|x| x.ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
     /// 数据清理:删除 before_ts 之前的用量/快照/事件(设置页滚动周期用)
     pub fn cleanup_older_than(&self, before_ts: i64) -> u64 {
         let conn = self.conn.lock().unwrap();

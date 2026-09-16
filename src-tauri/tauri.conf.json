@@ -12,9 +12,16 @@
   "app": {
     "windows": [
       {
+        "label": "island",
         "title": "AgentTracker",
-        "width": 800,
-        "height": 600
+        "width": 480,
+        "height": 48,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "transparent": true,
+        "resizable": false,
+        "shadow": false
       }
     ],
     "security": {

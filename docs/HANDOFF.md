@@ -5,18 +5,20 @@
 
 ## 当前状态(2026-09-16)
 
-- **阶段**:阶段 3(实施)进行中,进度 **T0–T6 ✅(7/14)**
-- ✅ T0 环境 / T1 骨架 / T2 存储层 / T3 ZCode 适配器 / T4 Claude Code 适配器(A2 对账,01-RESEARCH §8)
-- ✅ T5 GLM Provider(真实 API 调用通过,凭据自动发现自 claude-menu suppliers.json)
-- ✅ T6 hooks 链路:e2e 实测通过(3 个真实事件捕获/卸载还原语义等价/Drop 守卫防残留)
-- 关键代码:src-tauri/src/{store/,collector/{mod,zcode,claude_code,hook_events}.rs,provider/{mod,glm}.rs,../hook-bridge/hook-bridge.js}
+- **阶段**:阶段 3(实施)进行中,进度 **T0–T7 ✅(8/14)——数据+状态层全部就绪**
+- ✅ T0–T6 见前次记录(数据层五件套:存储/ZCode/ClaudeCode/GLM/hooks)
+- ✅ T7 状态聚合器:state/{mod,service}.rs;单测 13/13+集成 7/7;
+  e2e 实测 46 会话/岛 AnyError(额度100%标红)/ZCode 47M tokens;
+  关键教训:hooks 事件窗口(30min)必须>看门狗(5min)
+- git:首次提交已推送 GitHub(ldtmore/AgentTracker,main);T7 之后的提交待所有者指示
 
 ## 下一步
 
-**T7 状态聚合器**:三级融合(hooks 事件 > 文件/usage 启发式 > 进程枚举)+ 看门狗(working>5min 无
-活动回 idle)+ error 判定(Notification 消息限流关键词正则/ZCode error_type/额度 100%)+
-岛收缩态聚合逻辑(任一 error→红等);同时在此层落地 T5 的 5min 定时刷新调度与失败降级(最近快照)。
-进程枚举兜底需加 sysinfo crate。数据输入:scan_sessions/collect_usage(HookEvent 窗口近 N 秒事件)。
+**T8 岛 UI-壳**:tauri.conf.json 主窗改岛形态(decorations:false/always_on_top/skip_taskbar/
+transparent/resizable:false/shadow:false)+ window-vibrancy Acrylic + 默认顶部居中(计算
+workArea)+ 拖拽记忆(app_settings 存坐标)+ 托盘菜单;lib.rs setup 里 spawn 后台线程 10s tick
+调 Aggregator,emit "island-snapshot" 事件给前端。
+之后 T9 岛 UI-内容(React 组件消费快照)。
 环境提醒:cargo 带 RUSTUP_HOME/CARGO_HOME/PATH,外网 HTTPS_PROXY,Bash 显式 cd /f/AgentTracker。
 
 ## 关键背景(新接手者必读)
@@ -30,6 +32,7 @@
 
 ## 踩坑记录
 
+- **UI 三连坑(T8 实战)**:①写前端文件路径勿多一层(曾误写 src/src/App.tsx 导致 vite 一直服务模板——Write 成功≠路径正确,**UI 改动必须以屏幕真实渲染为验收**);②window-vibrancy/Acrylic 是**窗口级**效果,整个矩形窗口变磨砂灰,胶囊形态必须"窗口全透明+CSS 自绘背景"(依赖保留未用);③tauri dev 用 TaskStop 后 agenttracker.exe 与 vite 可能残留并占 1420 端口,重启 dev 前先 taskkill + 清端口
 - **Claude Code JSONL 数据知识(T4 实测)**:同一 assistant 消息平均重复 ~3 次(流式快照/会话恢复复制),必须按 messageId(+requestId)去重并保留用量最大快照;`<synthetic>` 行是本地合成消息(usage 全 0)须过滤;`cost-state` 行是会话级累计快照(ccusage 纳入、我们没有,对账差 1.7% 的来源);本机数据无 requestId 字段;**集成测试勿断言"增量采集为空"**(活跃会话在写入,竞态必挂,容忍 ≤5 行)——对账详情见 01-RESEARCH §8
 - **参考工具优先**:遇到解析/口径问题先看调研存档 E:\AIAgentTemp\AgentTracker-research\(better-ccusage/ccusage/glm-quota-line 源码),别自己盲试变体
 - **Rust 测试要点**:mod tests 所在文件必须在父 mod.rs 里声明(`pub mod zcode;`),否则整文件不参与编译且无任何警告;模型名比较一律小写化(真实数据 GLM-5.3/glm-5.3 混用);rusqlite 0.40 的 Error 无 io 变体,统一用 anyhow

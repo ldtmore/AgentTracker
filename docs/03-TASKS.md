@@ -82,19 +82,31 @@
   (Notification 的限流关键词判定,T7 用);④"10s 内反映到岛状态"在 T7/T9 联动验收
 - 依赖:T2 ✅
 
-### T7 状态聚合器 ⬜
+### T7 状态聚合器 ✅(2026-09-16 完成)
 
-- 内容:三级融合(hooks>文件启发式>进程枚举)+ 看门狗(5min)+ error 判定(限流正则/
-  error_type/额度100%)+ 岛收缩态聚合逻辑;进程枚举兜底(sysinfo crate)
-- 验收:**A1**——工作/等待/出错三真实场景状态正确;拔掉 hooks(增强档)后仍有启发式状态;
-  看门狗生效不卡死
-- 依赖:T3,T4,T6
+- 内容:state/{mod,service}.rs——状态机纯函数(error 判定:限流正则/ZCode error_type/额度 100%;
+  hooks 事件驱动;看门狗 5min;启发式 90s 活跃窗;进程枚举兜底 sysinfo)+ Aggregator 服务
+  (10s tick:双适配器增量采集→入库→融合→快照;GLM 5min 刷新+失败降级最近快照;
+  5h 额度 100% 时活跃会话标红)
+- 验收:✅ 单测 13/13(状态全矩阵/看门狗/聚合优先级);✅ e2e 本机真实数据:
+  46 会话融合,岛 AnyError(GLM 5h 100% 正确触发),ZCode 本会话 47M tokens 统计正确;
+  **当前 hooks 未安装(增强档已卸),状态来自启发式层——"拔掉 hooks 仍可用"已实测证明**
+- 备注:设计缺陷被单测逮住并修正——hooks 事件有效窗口须大于看门狗窗口(30min vs 5min),
+  否则看门狗分支不可达;quota 100% 的会话标红属产品口径,后续可在设置里提供开关
+- 依赖:T3,T4,T5,T6 ✅
 
-### T8 岛 UI-壳 ⬜
+### T8 岛 UI-壳 ✅(2026-09-16 完成)
 
-- 内容:island 主窗(02-DESIGN §5 窗口配置)+ Acrylic + 顶部居中 + 拖拽换位记忆 + 托盘菜单
-- 验收:窗口置顶无边框不抢任务栏;拖拽后重启位置保持;Acrylic 生效(Win10 降级正常)
-- 依赖:T1
+- 内容:tauri.conf.json 岛窗口(decorations:false/alwaysOnTop/skipTaskbar/transparent/
+  resizable:false/shadow:false)+ 顶部居中定位与拖拽坐标记忆(Moved→app_settings)+
+  托盘(显示/隐藏/退出)+ 后台聚合线程(10s tick→emit island-snapshot)+ 前端收缩态
+  (胶囊/状态灯呼吸脉冲/摘要文案/token 缩写,CSS 自绘背景)
+- 验收:✅ 形态经所有者屏幕实测确认;进程内存 39–48MB(含聚合器,红线 ≤100MB);
+  数据库落盘 %APPDATA%\com.agenttracker.app\agenttracker.db,10s 刷新闭环
+- 备注:① Acrylic 弃用——window-vibrancy 是**窗口级**效果,把整个矩形染灰破坏胶囊
+  形态;正确做法=窗口全透明+CSS 自绘(依赖保留,M1 全宽形态可再评估);
+  ② 拖拽位置记忆与托盘菜单的交互行为并入 T12 冒烟一并验收
+- 依赖:T7 ✅
 
 ### T9 岛 UI-内容 ⬜
 
