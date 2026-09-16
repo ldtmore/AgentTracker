@@ -119,24 +119,33 @@
   数据 10s 刷新闭环(T8 已验);capabilities 增 set-size/set-position 权限
 - 依赖:T7,T8 ✅
 
-### T10 点击跳转 ⬜
+### T10 点击跳转 🟨(2026-09-16 部分完成,所有者决定不阻塞)
 
-- 内容:点击会话卡 → 定位该会话所属终端/IDE 窗口(windows-rs 枚举+前台进程关联)→ SetForegroundWindow
-- 验收:**A4**——双终端各跑 Claude Code/ZCode 场景下,点卡片分别激活正确窗口
-- 依赖:T9
+- 内容:commands.rs——窗口枚举(EnumWindows+PID)+ 四级匹配(标题含完整路径 >
+  目录名 > 进程链匹配(跑 claude 的 pwsh→父链→WT 宿主窗口)> Agent 关键词)+
+  focus_session command;前端卡片 onClick
+- 验收:✅ **A4 部分通过**:ZCode 卡片 → ZCode 桌面窗口激活正常;
+  ❌ Windows Terminal(PowerShell 7 + Claude CLI)未命中——所有者指示搁置,
+  不阻塞 M0(详见待议区)
+- 依赖:T9 ✅
 
-### T11 设置页 ⬜
+### T11 设置页 ✅(2026-09-16 完成)
 
-- 内容:GLM 平台/key、提醒阈值、数据清理周期(8 档)、hooks 开关、开机自启(默认关)、毛玻璃开关
-- 验收:设置持久化重启生效;key 不出现在日志
-- 依赖:T5,T6,T8
+- 内容:settings 窗口(#settings hash 分流)+ Settings.tsx 五区块(GLM 平台/key 密码框、
+  提醒阈值、清理周期 8 档、hooks 启用/停用、开机自启 tauri-plugin-autostart);
+  Rust commands(get_settings/set_setting/hooks_*/autostart_*);GLM 凭据优先级改
+  应用设置>env>claude-menu;启动时按周期执行数据清理;设置窗口关闭即隐藏(可反复唤起)
+- 验收:✅ 所有者实测通过(五区块正常/设置窗口反复唤起修复);
+  key 仅存本地 app_settings 不入日志;凭据/阈值重启生效已明示
+- 依赖:T8 ✅(hooks 命令复用 T6)
 
-### T12 验收与打包 ⬜
+### T12 验收与打包 ⏸(2026-09-16 暂停,所有者指示:先完成代码细节调整)
 
 - 内容:红线回归(A6:退出/卸载工具后两 Agent 无报错)+ 性能(A5:内存≤100MB、冷启动≤2s)+
-  便携 zip( portable 产物+首次运行说明)
-- 验收:A5/A6 通过;zip 解压即用;附验收记录写入本文档
-- 依赖:T3–T11
+  便携 zip(release 产物+首次运行说明)
+- 已完成:bundle 配置改为 active=false(纯 release exe,不出安装包)
+- 待恢复:release 构建 + 性能实测 + 红线回归 + zip
+- 依赖:T3–T11(T10 部分完成已获所有者接受)
 
 ### T13 Dogfood 周 ⬜
 
@@ -146,7 +155,11 @@
 
 ## 待议区(看板外想法,不擅自实施)
 
-- (空)
+- **WT 中 Claude Code 卡片跳转未命中**(T10 遗留):ZCode ✅/标题含路径的场景理论 ✅,
+  但所有者环境(Windows Terminal + PowerShell 7)进程链匹配未命中。下次调试线索:
+  ①打印 WT 进程树(pwsh 的父链是 WindowsTerminal.exe 还是经 OpenConsole/conhost 中转);
+  ②确认 sysinfo 能否读到 WT 子进程 cmdline(UWP 权限);③考虑改用窗口类名
+  (WindowsTerminal 的类 CASCADIA_HOSTING_WINDOW_CLASS)兜底
 
 ## 交接锚点
 

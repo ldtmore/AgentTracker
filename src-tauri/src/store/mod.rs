@@ -227,6 +227,32 @@ impl Store {
         }
     }
 
+    /// 查会话元数据(project_dir/agent),跳转窗口用
+    pub fn get_session_meta(&self, id: &str) -> Option<(String, Option<String>)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT agent, project_dir FROM sessions WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    /// 读取全部设置(设置页展示)
+    pub fn all_settings(&self) -> std::collections::HashMap<String, String> {
+        let conn = self.conn.lock().unwrap();
+        let Ok(mut stmt) = conn.prepare("SELECT key, value FROM app_settings") else {
+            return std::collections::HashMap::new();
+        };
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)));
+        match rows {
+            Ok(it) => it.filter_map(|x| x.ok()).collect(),
+            Err(_) => std::collections::HashMap::new(),
+        }
+    }
+
     /// 数据清理:删除 before_ts 之前的用量/快照/事件(设置页滚动周期用)
     pub fn cleanup_older_than(&self, before_ts: i64) -> u64 {
         let conn = self.conn.lock().unwrap();

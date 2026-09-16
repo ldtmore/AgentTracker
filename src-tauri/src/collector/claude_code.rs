@@ -275,6 +275,17 @@ fn bridge_script_path() -> Option<PathBuf> {
     Some(PathBuf::from(std::env::var_os("USERPROFILE")?).join(".claude").join("hooks").join("hook-bridge.js"))
 }
 
+/// 查询 hooks 是否已安装(settings.json 中存在自家注入条目)
+pub fn hooks_installed() -> bool {
+    let Some(path) = claude_settings_path() else { return false };
+    if !path.exists() {
+        return false;
+    }
+    std::fs::read_to_string(&path)
+        .map(|raw| raw.contains(BRIDGE_MARK))
+        .unwrap_or(false)
+}
+
 /// 安装:①桥脚本写出到 ~\.claude\hooks\hook-bridge.js;
 /// ②settings.json 备份后合并注入 7 事件(防重复);返回注入条数
 pub fn install_hooks() -> anyhow::Result<usize> {

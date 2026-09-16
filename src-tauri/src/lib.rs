@@ -1,4 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+pub mod commands;
 pub mod collector;
 pub mod provider;
 pub mod state;
@@ -15,15 +16,94 @@ use crate::store::Store;
 /// 岛窗口标签(tauri.conf.json 中定义)
 const ISLAND: &str = "island";
 
+/// 点击会话卡片 → 激活对应终端/IDE 窗口(T10,窗口级定位)
+#[tauri::command]
+fn focus_session(session_id: String, store: tauri::State<'_, Arc<Store>>) -> bool {
+    let Some((agent, project_dir)) = store.get_session_meta(&session_id) else {
+        return false;
+    };
+    commands::find_session_window(&agent, project_dir.as_deref())
+        .map(commands::activate_window)
+        .unwrap_or(false)
+}
+
+// ===== 设置页 commands(T11) =====
+
+/// 读取全部设置(键值对;key 类敏感值原样返回——本地单用户工具,无多用户泄露面)
+#[tauri::command]
+fn get_settings(store: tauri::State<'_, Arc<Store>>) -> std::collections::HashMap<String, String> {
+    store.all_settings()
+}
+
+/// 写单条设置
+#[tauri::command]
+fn set_setting(key: String, value: String, store: tauri::State<'_, Arc<Store>>) {
+    store.set_setting(&key, &value);
+}
+
+/// hooks 安装状态(检查 settings.json 中是否存在自家注入条目)
+#[tauri::command]
+fn hooks_status() -> bool {
+    collector::claude_code::hooks_installed()
+}
+
+/// 安装 hooks(增强档:精确状态)
+#[tauri::command]
+fn install_hooks() -> Result<usize, String> {
+    collector::claude_code::install_hooks().map_err(|e| e.to_string())
+}
+
+/// 卸载 hooks(还原 settings.json)
+#[tauri::command]
+fn uninstall_hooks() -> Result<usize, String> {
+    collector::claude_code::uninstall_hooks().map_err(|e| e.to_string())
+}
+
+/// 开机自启状态
+#[tauri::command]
+fn autostart_get(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|e| e.to_string())
+}
+
+/// 设置开机自启(默认关,红线⑤)
+#[tauri::command]
+fn autostart_set(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let al = app.autolaunch();
+    if enable {
+        al.enable().map_err(|e| e.to_string())
+    } else {
+        al.disable().map_err(|e| e.to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        .invoke_handler(tauri::generate_handler![
+            focus_session,
+            get_settings,
+            set_setting,
+            hooks_status,
+            install_hooks,
+            uninstall_hooks,
+            autostart_get,
+            autostart_set
+        ])
         .setup(|app| {
             // 自库:安装目录下 %APPDATA%\com.agenttracker.app\agenttracker.db
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let store = Arc::new(Store::open(&dir.join("agenttracker.db"))?);
+            app.manage(store.clone());
 
             let win = app
                 .get_webview_window(ISLAND)
@@ -46,7 +126,33 @@ pub fn run() {
                 });
             }
 
+            // 设置窗口:关闭即隐藏(而非销毁),保证托盘可反复唤起
+            if let Some(sw) = app.get_webview_window("settings") {
+                let sw2 = sw.clone();
+                sw.on_window_event(move |ev| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = ev {
+                        api.prevent_close();
+                        let _ = sw2.hide();
+                    }
+                });
+            }
+
             build_tray(app)?;
+
+            // 数据清理:按设置周期启动时执行一次(永不=跳过)
+            if let Some(days) = store
+                .get_setting("cleanup_days")
+                .and_then(|v| v.parse::<i64>().ok())
+            {
+                if days > 0 {
+                    let cutoff =
+                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64 - days * 86_400_000)
+                            .unwrap_or(0);
+                    store.cleanup_older_than(cutoff);
+                }
+            }
+
             spawn_aggregator(app.handle().clone(), store);
             Ok(())
         })
@@ -73,14 +179,15 @@ fn position_island(win: &tauri::WebviewWindow, store: &Store) {
     let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
-/// 系统托盘:常驻核心;M0 菜单=显示/隐藏 + 退出
+/// 系统托盘:常驻核心;菜单=显示/隐藏 + 设置 + 退出
 fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::TrayIconBuilder;
 
     let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏灵动岛", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &quit])?;
+    let menu = Menu::with_items(app, &[&toggle, &settings, &quit])?;
     TrayIconBuilder::with_id("at-tray")
         .tooltip("AgentTracker")
         .icon(app.default_window_icon().expect("应用图标").clone())
@@ -94,6 +201,11 @@ fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
                     } else {
                         let _ = w.show();
                     }
+                }
+            }
+            "settings" => {
+                if let Some(w) = app.get_webview_window("settings") {
+                    let _ = (w.show(), w.set_focus());
                 }
             }
             _ => {}

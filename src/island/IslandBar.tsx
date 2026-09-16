@@ -30,8 +30,6 @@ export default function IslandBar({ snap }: { snap: IslandSnapshot | null }) {
     (q) => q.provider === "glm" && q.window_kind === "5h",
   );
   const q5hPct = q5h?.used_percent;
-  const quotaText =
-    q5hPct != null ? ` · 5h ${Math.round(q5hPct)}%` : "";
   const quotaCls =
     q5hPct != null ? ` quota-${quotaLevel(q5hPct)}` : "";
 

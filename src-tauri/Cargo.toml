@@ -28,6 +28,8 @@ chrono = "0.4.45"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls"] }
 sysinfo = "0.39.6"
 window-vibrancy = "0.8.0"
+windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+tauri-plugin-autostart = "2.5.1"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

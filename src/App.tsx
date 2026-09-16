@@ -1,6 +1,6 @@
 /**
- * 灵动岛入口:消费 island-snapshot 快照;hover 展开面板(窗口高度动态调整,
- * 宽度恒定避免锚点跳变);收缩/展开全程不抢焦点(红线⑤)
+ * 应用入口:按窗口 URL hash 分流 —— #settings 渲染设置页(常规窗口),
+ * 其余渲染灵动岛(透明窗口);岛消费 island-snapshot 快照,hover 展开面板
  */
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -8,6 +8,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import IslandBar from "./island/IslandBar";
 import Panel from "./island/Panel";
+import Settings from "./Settings";
 import type { IslandSnapshot } from "./shared/types";
 import "./App.css";
 
@@ -15,7 +16,7 @@ import "./App.css";
 const COLLAPSED_H = 48;
 const EXPANDED_H = 520;
 
-function App() {
+function IslandApp() {
   const [snap, setSnap] = useState<IslandSnapshot | null>(null);
   const [expanded, setExpanded] = useState(false);
 
@@ -50,6 +51,14 @@ function App() {
       )}
     </div>
   );
+}
+
+/** 按 URL hash 分流:设置窗口 / 灵动岛窗口 */
+function App() {
+  if (window.location.hash === "#settings") {
+    return <Settings />;
+  }
+  return <IslandApp />;
 }
 
 export default App;

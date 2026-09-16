@@ -3,6 +3,7 @@
  * 点击会话卡片的跳转行为由 T10 接入(onClick 预留)
  */
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { IslandSnapshot, SessionView } from "../shared/types";
 import { SESSION_META, fmtCountdown, fmtTokens } from "../shared/types";
 import { quotaLevel } from "./IslandBar";
@@ -35,8 +36,12 @@ function sortSessions(list: SessionView[]): SessionView[] {
 function SessionCard({ s }: { s: SessionView }) {
   const meta = SESSION_META[s.state];
   const project = s.project_dir?.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  // 点击跳转:激活该会话对应的终端/IDE 窗口(T10;未命中静默失败)
+  const focus = () => {
+    invoke("focus_session", { sessionId: s.id }).catch(() => {});
+  };
   return (
-    <div className="card" data-session-id={s.id}>
+    <div className="card" data-session-id={s.id} onClick={focus}>
       <span className={`dot ${meta.dot}`} />
       <span className="card-badge">{AGENT_BADGE[s.agent] ?? "??"}</span>
       <span className="card-model">{s.model ?? "--"}</span>
@@ -90,7 +95,7 @@ export default function Panel({ snap }: { snap: IslandSnapshot }) {
     <div className="panel">
       <div className="panel-title">
         会话 · {snap.sessions.length}
-        <span className="panel-hint">悬浮查看 · 点击卡片跳转(即将上线)</span>
+        <span className="panel-hint">点击卡片跳转对应窗口</span>
       </div>
       <div className="panel-sessions">
         {sessions.map((s) => (

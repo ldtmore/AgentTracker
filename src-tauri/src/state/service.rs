@@ -68,13 +68,26 @@ impl Aggregator {
             .get_setting("hook_events_offset")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
+        // GLM 凭据优先级:应用设置 > 环境变量 > claude-menu suppliers.json(T11)
+        let glm = if let (Some(base), Some(token)) = (
+            store.get_setting("glm_base"),
+            store.get_setting("glm_token"),
+        ) {
+            if !base.is_empty() && !token.is_empty() {
+                Some(GlmProvider::new(&base, &token))
+            } else {
+                None
+            }
+        } else {
+            GlmProvider::discover().map(|c| GlmProvider::new(&c.base, &c.token))
+        };
         Self {
             store,
             zcode: ZcodeAdapter::new(),
             cc: ClaudeCodeAdapter::new(),
             hook_offset,
             last_quota_fetch: 0,
-            glm: GlmProvider::discover().map(|c| GlmProvider::new(&c.base, &c.token)),
+            glm,
         }
     }
 
