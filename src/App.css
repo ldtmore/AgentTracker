@@ -1,6 +1,6 @@
-/* AgentTracker 灵动岛收缩态样式(暗色科技风,02-DESIGN §5) */
+/* AgentTracker 灵动岛样式(暗色科技风,02-DESIGN §5) */
 
-/* 透明窗口:html/body 必须透明,圆角由 .island 呈现 */
+/* 透明窗口:html/body 必须透明,形态由内部元素呈现 */
 html,
 body,
 #root {
@@ -9,28 +9,35 @@ body,
   height: 100%;
   overflow: hidden;
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 13px;
+  color: #e8eaf0;
   user-select: none;
 }
 
+.root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* ===== 收缩态胶囊 ===== */
+
 .island {
   box-sizing: border-box;
-  width: 100%;
   height: 48px;
+  flex: none;
   border-radius: 24px;
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 0 18px;
-  /* 深色半透明底(配合 Acrylic;无 Acrylic 时也有基础观感) */
-  background: rgba(20, 20, 24, 0.55);
+  background: rgba(20, 20, 24, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.09);
-  color: #e8eaf0;
-  font-size: 13px;
-  /* 子元素禁点选以保拖拽(T9 交互元素单独放开) */
 }
 
 .island > * {
-  pointer-events: none;
+  pointer-events: none; /* 保证整条可拖拽 */
 }
 
 /* 状态灯 */
@@ -99,9 +106,219 @@ body,
   text-overflow: ellipsis;
 }
 
+.island-quota {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.island-quota.quota-warn {
+  color: #fbbf24;
+}
+
+.island-quota.quota-danger {
+  color: #f87171;
+}
+
 .island-tokens {
   flex: none;
   font-size: 12px;
   color: #9ca3af;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 展开面板 ===== */
+
+.panel-wrap {
+  flex: 1;
+  margin-top: 6px;
+  min-height: 0;
+}
+
+.panel {
+  box-sizing: border-box;
+  height: 100%;
+  border-radius: 16px;
+  background: rgba(20, 20, 24, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  gap: 8px;
+}
+
+.panel-title {
+  font-size: 12px;
+  color: #9ca3af;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex: none;
+}
+
+.panel-hint {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 会话列表(滚动区) */
+.panel-sessions {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-right: 4px;
+}
+
+.panel-sessions::-webkit-scrollbar {
+  width: 6px;
+}
+
+.panel-sessions::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.panel-empty {
+  color: #6b7280;
+  text-align: center;
+  padding: 24px 0;
+}
+
+/* 会话卡片 */
+.card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer; /* T10 接入跳转 */
+}
+
+.card:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.card .dot {
+  width: 8px;
+  height: 8px;
+}
+
+.card-badge {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  color: #0b0d10;
+  background: #9ca3af;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.card-model {
+  flex: none;
+  font-size: 12px;
+  color: #d1d5db;
+}
+
+.card-project {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: #9ca3af;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-state {
+  flex: none;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.card-tokens {
+  flex: none;
+  font-size: 11px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 额度区 */
+.panel-quota {
+  flex: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quota-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.quota-label {
+  flex: none;
+  width: 44px;
+  font-size: 12px;
+  color: #d1d5db;
+}
+
+.quota-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.quota-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s ease;
+}
+
+.fill-normal {
+  background: #34d399;
+}
+
+.fill-warn {
+  background: #fbbf24;
+}
+
+.fill-danger {
+  background: #f87171;
+}
+
+.quota-pct {
+  flex: none;
+  width: 38px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.text-normal {
+  color: #34d399;
+}
+
+.text-warn {
+  color: #fbbf24;
+}
+
+.text-danger {
+  color: #f87171;
+}
+
+.quota-reset {
+  flex: none;
+  width: 90px;
+  font-size: 11px;
+  color: #6b7280;
   font-variant-numeric: tabular-nums;
 }
