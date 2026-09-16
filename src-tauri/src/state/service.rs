@@ -286,7 +286,7 @@ fn probe_processes() -> (bool, bool) {
             .to_ascii_lowercase();
         if (n.contains("claude") || cmd.contains("claude"))
             && !cmd.contains("claude-menu")
-            && !cmd.contains("agenttracker")
+            && !cmd.contains("agenttrackerisland")
             && !cmd.contains("hook-bridge")
         {
             c = true;

@@ -58,7 +58,7 @@ pub fn find_session_window(agent: &str, project_dir: Option<&str>) -> Option<isi
                 return Some(*h);
             }
         }
-        // ② 标题含项目目录末段(如 AgentTracker)
+        // ② 标题含项目目录末段(如 AgentTrackerIsland)
         if let Some(name) = dir.rsplit(['\\', '/']).next().filter(|s| !s.is_empty()) {
             let name = name.to_ascii_lowercase();
             if name.len() >= 3 {
@@ -123,7 +123,7 @@ fn find_terminal_running_claude(windows: &[(isize, String, u32)]) -> Option<isiz
             .collect::<String>()
             .to_ascii_lowercase();
         if cmd.contains("claude")
-            && !cmd.contains("agenttracker")
+            && !cmd.contains("agenttrackerisland")
             && !cmd.contains("claude-menu")
         {
             // 沿父进程链全部标记(直到 WT 宿主/无父)

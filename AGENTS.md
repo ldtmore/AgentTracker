@@ -1,11 +1,11 @@
-# AgentTracker 开发宪法(所有贡献者必须遵守)
+# AgentTrackerIsland 开发宪法(所有贡献者必须遵守)
 
-> 本文件是 AgentTracker 的最高设计约束。任何功能设计、代码实现、PR 审查,
+> 本文件是 AgentTrackerIsland 的最高设计约束。任何功能设计、代码实现、PR 审查,
 > 与本文件冲突时,以本文件为准;要修改本文件,必须先说明"为什么定位变了"。
 
 ## 一、产品定位(一句话)
 
-AgentTracker 是当前主流 AI Agent 的**旁路观测工具**:只看,不碰。
+AgentTrackerIsland 是当前主流 AI Agent 的**旁路观测工具**:只看,不碰。
 有它,用户能实时掌握各 Agent 的状态与消耗数据;没有它,各 Agent 照常工作。
 它的存在与缺席,对用户原有工作流**零影响**。
 

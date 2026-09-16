@@ -444,12 +444,12 @@ mod tests {
         let file = dir.join("s.jsonl");
         std::fs::write(&file, concat!(
             r#"{"type":"summary","summary":"无 cwd 的行应跳过"}"#, "\n",
-            r#"{"type":"user","cwd":"F:\\MyProjectRepository\\AgentTracker","timestamp":"2026-09-16T10:00:00.000Z"}"#, "\n",
+            r#"{"type":"user","cwd":"F:\\MyProjectRepository\\AgentTrackerIsland","timestamp":"2026-09-16T10:00:00.000Z"}"#, "\n",
             r#"{"type":"user","cwd":"F:\\另一个目录不应被选中"}"#, "\n"
         )).unwrap();
         assert_eq!(
             ClaudeCodeAdapter::first_cwd(&file).as_deref(),
-            Some("F:\\MyProjectRepository\\AgentTracker")
+            Some("F:\\MyProjectRepository\\AgentTrackerIsland")
         );
         // 全部无 cwd:None(调用方退回编码目录名)
         let f2 = dir.join("empty.jsonl");
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn test_parse_transcript_lines() {
         let dir = std::env::temp_dir().join(format!("at-t4-{}", std::process::id()));
-        let proj = dir.join("F--AgentTracker-test");
+        let proj = dir.join("F--AgentTrackerIsland-test");
         std::fs::create_dir_all(&proj).unwrap();
         let file = proj.join("sess-test-0001.jsonl");
         let lines = [

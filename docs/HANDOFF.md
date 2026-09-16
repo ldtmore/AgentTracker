@@ -12,8 +12,8 @@
 - 已知搁置:所有者暂记了一批功能/统计/展示的待优化项(见 03-TASKS 待议区),
   后续统一优化修改;有新发现随时补录
 - ✅ T8 岛壳/T9 展开面板/T10 点击跳转(部分)/T11 设置页——验收记录见 03-TASKS.md 对应条目
-- git:审查修复已提交推送(b0a1652,19 文件,2026-09-16);**M1-1/M1-6/M1-7 代码与
-  文档回写均未提交,待所有者确认后提交**
+- git:M1-1/M1-6/M1-7 代码与文档回写已提交推送(aa7a0b3,2026-09-17);
+  **2026-09-17 项目更名 AgentTrackerIsland,全量标识更正随本次会话提交**
 - 第三次会话(2026-09-17):**全量需求↔代码审查**(发现 P1 凭据回退/P2 增量去重口径/
   P3 进程误判 + 一批文档未回写),按所有者指示**修复代码问题后按代码回写文档**:
   ①GLM 凭据留空回落发现链+来源展示;②用量幂等键冲突取最大快照;③hook-bridge
@@ -21,7 +21,14 @@
   ⑥陈旧注释修正;02-DESIGN 七处回写(§1 技术栈/§2.1 trait/§2.2 凭据链/§2.3 状态机/
   §3 清理/§4 hook 协议/§5 托盘),看板+HANDOFF 同步。
   验证:cargo test **19/19**(新增 upsert 快照测试)+ npm run build 通过
-- 注意:项目实际路径为 F:\MyProjectRepository\AgentTracker(旧文档中 F:\AgentTracker 为历史写法)
+- 注意(2026-09-17 更名):项目由 AgentTracker 更名为 **AgentTrackerIsland**,实际路径
+  F:\MyProjectRepository\AgentTrackerIsland(旧文档中 F:\MyProjectRepository\AgentTracker /
+  F:\AgentTracker 均为更名前写法);标识符同步切换:GitHub 仓库 ldtmore/AgentTrackerIsland、
+  npm/cargo 包名 agenttrackerisland、lib 名 agenttracker_island_lib、Tauri identifier
+  com.agenttrackerisland.app、自库 %APPDATA%\com.agenttrackerisland.app\agenttrackerisland.db、
+  事件目录 %LOCALAPPDATA%\AgentTrackerIsland\events——旧路径数据留在原地未迁移,
+  更名后需在设置页**重新安装 hooks**(旧 hook-bridge 仍写旧事件目录);
+  调研存档 E:\AIAgentTemp\AgentTracker-research\ 为更名前目录,保留原名
 
 ## 下一步
 
@@ -45,7 +52,7 @@ Bash 显式 cd 到项目目录。
 3. Claude Code 适配器 = 解析 `~\.claude\projects\**\*.jsonl` + hooks 事件文件(协议 02-DESIGN §4)
 4. GLM 额度 = Monitor API(`/api/monitor/usage/quota/limit`,裸 key Authorization),响应字段见 01-RESEARCH §7
 5. hooks 官方文档站本机不可达 → T6 第一步先装诊断 hook 实测 stdin 字段
-6. 调研原始材料(竞品 README/GLM 源码/官方文档摘录)在 `E:\AIAgentTemp\AgentTracker-research\`
+6. 调研原始材料(竞品 README/GLM 源码/官方文档摘录)在 `E:\AIAgentTemp\AgentTracker-research\`(2026-09-17 项目更名前存档,路径保留原名)
 
 ## 踩坑记录
 
@@ -63,8 +70,9 @@ Bash 显式 cd 到项目目录。
   三重机制屏蔽自身事件,启动定位也必须走同一通道,否则会自触发吸附循环
 - **项目迁移目录坑(2026-09-16 验证实测)**:target/ 构建缓存嵌旧绝对路径(F:\AgentTracker),
   目录变更后 tauri 构建脚本报"系统找不到指定的路径"(指向旧盘符路径)——`cargo clean`
-  全量重建即可恢复(约 6 分钟)
-- **UI 三连坑(T8 实战)**:①写前端文件路径勿多一层(曾误写 src/src/App.tsx 导致 vite 一直服务模板——Write 成功≠路径正确,**UI 改动必须以屏幕真实渲染为验收**);②window-vibrancy/Acrylic 是**窗口级**效果,整个矩形窗口变磨砂灰,胶囊形态必须"窗口全透明+CSS 自绘背景"(依赖保留未用);③tauri dev 用 TaskStop 后 agenttracker.exe 与 vite 可能残留并占 1420 端口,重启 dev 前先 taskkill + 清端口
+  全量重建即可恢复(约 6 分钟);2026-09-17 更名迁移到 F:\MyProjectRepository\AgentTrackerIsland
+  后同样执行了 cargo clean 重建
+- **UI 三连坑(T8 实战)**:①写前端文件路径勿多一层(曾误写 src/src/App.tsx 导致 vite 一直服务模板——Write 成功≠路径正确,**UI 改动必须以屏幕真实渲染为验收**);②window-vibrancy/Acrylic 是**窗口级**效果,整个矩形窗口变磨砂灰,胶囊形态必须"窗口全透明+CSS 自绘背景"(依赖保留未用);③tauri dev 用 TaskStop 后 agenttrackerisland.exe 与 vite 可能残留并占 1420 端口,重启 dev 前先 taskkill + 清端口
 - **Claude Code JSONL 数据知识(T4 实测)**:同一 assistant 消息平均重复 ~3 次(流式快照/会话恢复复制),必须按 messageId(+requestId)去重并保留用量最大快照;`<synthetic>` 行是本地合成消息(usage 全 0)须过滤;`cost-state` 行是会话级累计快照(ccusage 纳入、我们没有,对账差 1.7% 的来源);本机数据无 requestId 字段;**集成测试勿断言"增量采集为空"**(活跃会话在写入,竞态必挂,容忍 ≤5 行)——对账详情见 01-RESEARCH §8
 - **参考工具优先**:遇到解析/口径问题先看调研存档 E:\AIAgentTemp\AgentTracker-research\(better-ccusage/ccusage/glm-quota-line 源码),别自己盲试变体
 - **Rust 测试要点**:mod tests 所在文件必须在父 mod.rs 里声明(`pub mod zcode;`),否则整文件不参与编译且无任何警告;模型名比较一律小写化(真实数据 GLM-5.3/glm-5.3 混用);rusqlite 0.40 的 Error 无 io 变体,统一用 anyhow

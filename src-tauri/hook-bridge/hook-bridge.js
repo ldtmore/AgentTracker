@@ -1,16 +1,16 @@
-// AgentTracker hook 桥:Claude Code hook → 本地事件文件(零依赖,单文件)
+// AgentTrackerIsland hook 桥:Claude Code hook → 本地事件文件(零依赖,单文件)
 // 安装后 command 形如:node "<home>/.claude/hooks/hook-bridge.js"(不需要事件名参数,
 // 事件名从 stdin 的 hook_event_name 读取——实测字段,2026-09-16)
 //
 // 设计约束(红线②故障隔离):只 append 本地文件即退出,不连端口、不找主进程;
-// AgentTracker 未运行时本脚本依旧秒级成功,Claude Code 零感知。
+// AgentTrackerIsland 未运行时本脚本依旧秒级成功,Claude Code 零感知。
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
 const eventsFile = path.join(
   process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-  'AgentTracker', 'events', 'claude-code.jsonl'
+  'AgentTrackerIsland', 'events', 'claude-code.jsonl'
 );
 
 let buf = '';

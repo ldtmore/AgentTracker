@@ -1,4 +1,4 @@
-# AgentTracker 项目计划(v1,M0 详细设计)
+# AgentTrackerIsland 项目计划(v1,M0 详细设计)
 
 > 状态:**草案已归档**——2026-09-16 起改用三阶段流程(需求梳理 → 调研回填 → 实施),
 > 见 [WORKFLOW.md](WORKFLOW.md)。本文件保留作为阶段 2 的输入材料(其中的技术判断仍可参考),
@@ -68,7 +68,7 @@
 ### 4.1 目录结构
 
 ```
-F:\AgentTracker\
+F:\MyProjectRepository\AgentTrackerIsland\
 ├─ AGENTS.md                  # 设计宪法
 ├─ docs\PLAN.md               # 本计划
 ├─ src\                       # 前端(React + TS)
@@ -157,7 +157,7 @@ CREATE TABLE status_events (
 
 **原则:hook 桥只写文件,永不停留。** 主程序不在时它照样秒成功,Agent 零感知。
 
-- 事件文件:`%LOCALAPPDATA%\AgentTracker\events\claude-code.jsonl`(append-only)
+- 事件文件:`%LOCALAPPDATA%\AgentTrackerIsland\events\claude-code.jsonl`(append-only)
 - 注入 `settings.json` 的 hook 命令(首启向导自动写入,设置页一键卸载):
   `node "<安装目录>\hook-bridge\hook-bridge.js" %CLAUDE_HOOK_NAME%`
   (hook-bridge 从 stdin 读 Claude Code 传入的 JSON,取 session_id/model 等,append 一行事件,退出)
@@ -165,7 +165,7 @@ CREATE TABLE status_events (
 
 **hook → 状态映射**:
 
-| Claude Code hook | AgentTracker 状态 |
+| Claude Code hook | AgentTrackerIsland 状态 |
 |---|---|
 | SessionStart | online |
 | UserPromptSubmit / PreToolUse / PostToolUse | working |

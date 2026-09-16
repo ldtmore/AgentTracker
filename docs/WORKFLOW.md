@@ -1,4 +1,4 @@
-# AgentTracker 协作工作流(多 Agent 接力开发规程)
+# AgentTrackerIsland 协作工作流(多 Agent 接力开发规程)
 
 > 本文件定义本项目的**标准执行流程**与**交接规则**。
 > 任何 AI Agent(或人类)参与本项目前必须先读本文件,再读 [AGENTS.md](../AGENTS.md)。

@@ -1,4 +1,4 @@
-# AgentTracker 任务看板(03-TASKS)
+# AgentTrackerIsland 任务看板(03-TASKS)
 
 > 阶段 3 执行清单 | 创建:2026-09-16 | 配套:[02-DESIGN](02-DESIGN.md)
 > 规则(见 [WORKFLOW](WORKFLOW.md)):每任务完成即更新本看板状态与 [HANDOFF](HANDOFF.md);
@@ -21,10 +21,10 @@
 
 ### T1 项目骨架 ✅(2026-09-16 完成)
 
-- 内容:`F:\AgentTracker` 下初始化 Tauri 2 + React/TS 模板,按 02-DESIGN §1 建目录
+- 内容:`F:\MyProjectRepository\AgentTrackerIsland`(更名前为 F:\AgentTracker,见 HANDOFF)下初始化 Tauri 2 + React/TS 模板,按 02-DESIGN §1 建目录
   (src-tauri/src/{collector,provider,state,store} + src/{island,shared});补充 .gitignore、git init
 - 验收:✅ `tauri dev` 打开窗口(PID 2880 实测,内存 ~42MB);✅ `cargo build` 全量通过(6m23s)
-  + 前端 `npm run build` 通过;debug 产物 target/debug/agenttracker.exe 生成
+  + 前端 `npm run build` 通过;debug 产物 target/debug/agenttrackerisland.exe 生成
 - 备注:模块子目录(collector/provider 等)尚未创建——T2 起按需建立;
   模块子目录随对应任务落地(避免空目录)
 - 依赖:T0 ✅
@@ -103,7 +103,7 @@
   托盘(显示/隐藏/退出)+ 后台聚合线程(10s tick→emit island-snapshot)+ 前端收缩态
   (胶囊/状态灯呼吸脉冲/摘要文案/token 缩写,CSS 自绘背景)
 - 验收:✅ 形态经所有者屏幕实测确认;进程内存 39–48MB(含聚合器,红线 ≤100MB);
-  数据库落盘 %APPDATA%\com.agenttracker.app\agenttracker.db,10s 刷新闭环
+  数据库落盘 %APPDATA%\com.agenttrackerisland.app\agenttrackerisland.db(2026-09-17 更名后路径),10s 刷新闭环
 - 备注:① Acrylic 弃用——window-vibrancy 是**窗口级**效果,把整个矩形染灰破坏胶囊
   形态;正确做法=窗口全透明+CSS 自绘(依赖保留,M1 全宽形态可再评估);
   ② 拖拽位置记忆与托盘菜单的交互行为并入 T12 冒烟一并验收
@@ -174,7 +174,7 @@
   日界/星期/小时用 SQLite 'localtime' 取本机时区)+ 单测 test_report_aggregates;
   托盘"报表…"入口 + 关窗即隐藏(与设置页同模式);前端 lazy 分割——echarts 独立
   chunk 仅报表窗口加载,岛主包只 +2KB;调研结论见 01-RESEARCH §9
-- ✅ AgentTracker 实例内屏幕自验(2026-09-17):四图+范围切换+滚动全正常,真实数据
+- ✅ AgentTrackerIsland 实例内屏幕自验(2026-09-17):四图+范围切换+滚动全正常,真实数据
   (09-16/09-17 单日 ~190M);发现并修复模型名大小写切片问题(report_slice 按小写归一)
 - 验收:所有者过目确认
 - 依赖:无

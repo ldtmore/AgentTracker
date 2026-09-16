@@ -58,7 +58,7 @@ export default function IslandBar({
       <span className="island-text" data-tauri-drag-region>
         {snap
           ? `${total} 会话${working > 0 ? ` · ${working} 工作中` : ""} · ${meta.label}`
-          : "AgentTracker 启动中…"}
+          : "AgentTrackerIsland 启动中…"}
       </span>
       {q5hPct != null && (
         <span className={`island-quota${quotaCls}`} data-tauri-drag-region>

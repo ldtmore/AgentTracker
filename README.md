@@ -1,4 +1,4 @@
-# AgentTracker
+# AgentTrackerIsland
 
 > 主流 AI Agent 的旁路观测台:灵动岛实时监控各 Agent 工作状态,统计大模型 token 消耗与额度——只看,不碰。
 

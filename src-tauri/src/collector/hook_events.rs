@@ -20,10 +20,10 @@ pub struct HookEvent {
     pub message: Option<String>,
 }
 
-/// 事件文件默认路径:%LOCALAPPDATA%\AgentTracker\events\claude-code.jsonl
+/// 事件文件默认路径:%LOCALAPPDATA%\AgentTrackerIsland\events\claude-code.jsonl
 pub fn events_file_path() -> Option<PathBuf> {
     let local = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(local).join("AgentTracker").join("events").join("claude-code.jsonl"))
+    Some(PathBuf::from(local).join("AgentTrackerIsland").join("events").join("claude-code.jsonl"))
 }
 
 /// 增量读取:返回(新事件, 新偏移)。

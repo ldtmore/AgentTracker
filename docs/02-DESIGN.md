@@ -1,4 +1,4 @@
-# AgentTracker 实现方案(02-DESIGN)
+# AgentTrackerIsland 实现方案(02-DESIGN)
 
 > 状态:**v1.0 定稿,回写至 2026-09-17**(基于 [00-REQUIREMENTS v1.0](00-REQUIREMENTS.md) + [01-RESEARCH](01-RESEARCH.md))
 > 定稿:2026-09-16 | 技术栈与架构经阶段 2 调研确认,实施期改动须回写本文档
@@ -150,7 +150,7 @@ CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT);
 
 ## 4. hook-bridge 事件协议(Claude Code 增强档)
 
-- 事件文件:`%LOCALAPPDATA%\AgentTracker\events\claude-code.jsonl`(append-only)
+- 事件文件:`%LOCALAPPDATA%\AgentTrackerIsland\events\claude-code.jsonl`(append-only;2026-09-17 项目更名后路径,旧 AgentTracker 目录数据留在原地未迁移)
 - 安装:设置页"启用精确状态"按钮→向 `~\.claude\settings.json` 的 hooks 注入
   SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop/Notification/SessionEnd
   各一条:`node "<home>\.claude\hooks\hook-bridge.js"`(async,注入 timeout 10s,
@@ -171,7 +171,7 @@ CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT);
 | 主窗 island | decorations:false, always_on_top, skip_taskbar, transparent, resizable:false, shadow:false |
 | 位置        | 默认顶部居中(计算 workArea);拖拽后坐标存 app_settings                                                    |
 | 效果        | 窗口全透明 + CSS 自绘背景(Acrylic 已弃用,见 §1 回写)                                   |
-| 收缩态       | 高~40px 胶囊:状态灯(8px 圆点)+ "AgentTracker"或聚合徽标 + GLM 额度%                                       |
+| 收缩态       | 高~40px 胶囊:状态灯(8px 圆点)+ "AgentTrackerIsland"或聚合徽标 + GLM 额度%                                       |
 | 展开态       | hover 展开(max-height 过渡):会话卡片区(每卡:状态点/Agent图标/模型/项目名/本会话 token)+ 额度区(5h/周双条+倒计时)            |
 | 展开 focus  | non-activating:展开不调 set_focus,pointerLeave 收起(红线⑤)                                         |
 | 托盘        | 右键菜单:显示/隐藏灵动岛、设置…、退出(左键同弹菜单)                                                                    |

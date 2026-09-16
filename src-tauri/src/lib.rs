@@ -506,10 +506,10 @@ pub fn run() {
             island_metrics
         ])
         .setup(|app| {
-            // 自库:安装目录下 %APPDATA%\com.agenttracker.app\agenttracker.db
+            // 自库:%APPDATA%\com.agenttrackerisland.app\agenttrackerisland.db
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let store = Arc::new(Store::open(&dir.join("agenttracker.db"))?);
+            let store = Arc::new(Store::open(&dir.join("agenttrackerisland.db"))?);
             app.manage(store.clone());
 
             let win = app
@@ -679,7 +679,7 @@ fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&toggle, &report, &settings, &quit])?;
     TrayIconBuilder::with_id("at-tray")
-        .tooltip("AgentTracker")
+        .tooltip("AgentTrackerIsland")
         .icon(app.default_window_icon().expect("应用图标").clone())
         .menu(&menu)
         .on_menu_event(|app, ev| match ev.id.as_ref() {

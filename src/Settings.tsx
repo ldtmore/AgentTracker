@@ -166,7 +166,7 @@ export default function Settings() {
 
   return (
     <div className="st-root">
-      <h2 className="st-header">AgentTracker 设置</h2>
+      <h2 className="st-header">AgentTrackerIsland 设置</h2>
 
       <Section title="GLM Coding Plan 凭据">
         <label className="st-label">平台</label>

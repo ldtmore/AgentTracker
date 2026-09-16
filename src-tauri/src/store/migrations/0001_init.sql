@@ -1,4 +1,4 @@
--- AgentTracker 自库初始化(0001)
+-- AgentTrackerIsland 自库初始化(0001)
 -- 时间戳约定:一律 Unix 毫秒;agent 取值:'claude-code' | 'zcode';provider:'glm' | ...
 
 -- 会话表:一个 Agent 会话一行(id = "{agent}:{sessionId}")

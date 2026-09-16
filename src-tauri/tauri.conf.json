@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AgentTracker",
+  "productName": "AgentTrackerIsland",
   "version": "0.1.0",
-  "identifier": "com.agenttracker.app",
+  "identifier": "com.agenttrackerisland.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "island",
-        "title": "AgentTracker",
+        "title": "AgentTrackerIsland",
         "width": 360,
         "height": 48,
         "decorations": false,
@@ -25,7 +25,7 @@
       },
       {
         "label": "settings",
-        "title": "AgentTracker 设置",
+        "title": "AgentTrackerIsland 设置",
         "url": "index.html#settings",
         "width": 460,
         "height": 600,
@@ -35,7 +35,7 @@
       },
       {
         "label": "report",
-        "title": "AgentTracker 报表",
+        "title": "AgentTrackerIsland 报表",
         "url": "index.html#report",
         "width": 940,
         "height": 680,

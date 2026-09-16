@@ -1,8 +1,8 @@
-# AgentTracker 调研报告
+# AgentTrackerIsland 调研报告
 
 > 状态:**调研中**(阶段 2) | 开始:2026-09-16
 > 目的:按 [00-REQUIREMENTS.md](00-REQUIREMENTS.md) 逐项找轮子,产出 🟢直接依赖 / 🟡借鉴实现 / 🔴必须自研 三分清单
-> 注:早期竞品调研(2026-09-16 第一轮)存档于 E:\AIAgentTemp\AgentTracker-research\
+> 注:早期竞品调研(2026-09-16 第一轮)存档于 E:\AIAgentTemp\AgentTracker-research\(2026-09-17 项目更名前存档,路径保留原名)
 
 ## 1. ZCode 本机数据勘察 ✅(2026-09-16,决定性成果)
 
@@ -81,7 +81,7 @@
 
 | 工具 | input | output | cache_read | total | 口径 |
 |---|---|---|---|---|---|
-| **AgentTracker(T4 实现)** | 1,295,911 | 379,214 | 26,300,032 | 27,975,157 | assistant 行,messageId(+requestId)去重保留最大快照 |
+| **AgentTrackerIsland(T4 实现)** | 1,295,911 | 379,214 | 26,300,032 | 27,975,157 | assistant 行,messageId(+requestId)去重保留最大快照 |
 | ccusage(Rust 版) | 1,495,477 | 389,518 | 26,572,544 | 28,457,539 | 同上去重 + 额外纳入非 assistant 源 |
 | better-ccusage(TS 版) | 75,329,127 | 884,293 | 98,125,376 | 174,338,796 | 多源(Claude Code+ZCode 混合),不可直接比 |
 

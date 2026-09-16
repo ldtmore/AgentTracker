@@ -1,4 +1,4 @@
-//! 本地存储层:AgentTracker 自库(SQLite)的打开/迁移/读写封装。
+//! 本地存储层:AgentTrackerIsland 自库(SQLite)的打开/迁移/读写封装。
 //! 设计依据 docs/02-DESIGN.md §3;红线③(顺序无关)由幂等键与水位保证。
 //! 线程模型:Connection 非 Sync,用 Mutex 包裹,单写多读经同一锁串行(M0 规模足够)。
 
