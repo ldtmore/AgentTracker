@@ -15,6 +15,7 @@ body,
 }
 
 .root {
+  position: relative; /* 贴边隐藏态标签的定位基准 */
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -38,6 +39,11 @@ body,
 
 .island > * {
   pointer-events: none; /* 保证整条可拖拽 */
+}
+
+/* 点击展开模式:胶囊可点击切换卡片 */
+.island-clickable {
+  cursor: pointer;
 }
 
 /* 状态灯 */
@@ -321,4 +327,197 @@ body,
   font-size: 11px;
   color: #6b7280;
   font-variant-numeric: tabular-nums;
+}
+
+/* ===== 贴边隐藏态标签(M1-6):独立微 UI,不是胶囊的截取 ===== */
+
+.edge-tab {
+  position: absolute;
+  box-sizing: border-box;
+  background: rgba(15, 17, 22, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden; /* 分段条被容器圆角裁切,首尾段贴合隐藏态边缘 */
+  /* 用内发光代替外阴影:外阴影伸出窗口矩形的部分会被裁平,
+     在圆角外沿形成"发虚的直角" */
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: filter 0.15s ease, border-color 0.15s ease;
+}
+
+/* 悬停提亮(标签本身的微交互反馈) */
+.edge-tab:hover {
+  filter: brightness(1.35);
+}
+
+.edge-tab * {
+  pointer-events: auto; /* 分段条带 tooltip;拖拽经各段自身的 drag-region 属性 */
+}
+
+/* 出错:描边 + 内圈红光,不悬停也能感知 */
+.edge-tab.edge-error {
+  border-color: rgba(248, 113, 113, 0.6);
+  box-shadow: inset 0 0 8px rgba(248, 113, 113, 0.35);
+}
+
+/* 顶部贴边:胶囊底部约 1/5 的短条(高与 Rust PEEK_TOP_H 对应,占满窗口宽);
+   分段横切,段间 1px 深缝分隔 */
+.edge-tab-top {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 14px;
+  border-radius: 0 0 16px 16px;
+  border-top: none;
+  gap: 1px;
+}
+
+/* 左贴边:半椭圆 D 形,窗口右缘伸入屏幕(与 Rust PEEK_SIDE_W 对应)。
+   100%/50% 圆角 = 左缘纯半椭圆(无直边),与扇形切分、额度弧线的几何一致 */
+.edge-tab-left {
+  right: 0;
+  top: 0;
+  width: 20px;
+  height: 48px;
+  border-radius: 0 100% 100% 0 / 0 50% 50% 0;
+  border-left: none;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* 右贴边:镜像 */
+.edge-tab-right {
+  left: 0;
+  top: 0;
+  width: 20px;
+  height: 48px;
+  border-radius: 100% 0 0 100% / 50% 0 0 50%;
+  border-right: none;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* ===== Agent 占比分段:颜色 = 身份(内联注入),状态用亮度/动效表达 ===== */
+
+/* 顶部横条:等宽分段,撑满隐藏态高度 */
+.edge-seg {
+  flex: 1 1 0;
+  min-width: 18px;
+  align-self: stretch;
+  overflow: hidden;
+  transition: opacity 0.3s ease;
+}
+
+/* 工作中:全亮 + 慢呼吸(4s/起伏 15%,保留"活着"暗示且不抢注意力) */
+.edge-seg.st-working {
+  animation: seg-breathe 4s ease-in-out infinite;
+}
+
+/* 等待输入:快闪(需要你注意,但仍不刺眼) */
+.edge-seg.st-waiting {
+  animation: seg-blink 1.2s ease-in-out infinite;
+}
+
+/* 出错:红圈描边 + 快闪(身份色保留在圈内) */
+.edge-seg.st-error {
+  box-shadow: inset 0 0 0 1.5px #f87171;
+  animation: seg-blink 0.9s ease-in-out infinite;
+}
+
+/* 空闲:45% 暗淡;离线:近隐没 */
+.edge-seg.st-idle {
+  opacity: 0.45;
+}
+
+.edge-seg.st-offline {
+  opacity: 0.18;
+}
+
+/* 呼吸(慢,4s):表达"工作中" */
+@keyframes seg-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+/* 快闪(1.2s):表达"等待输入" */
+@keyframes seg-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* 额度发丝进度线:贴顶条底边,长度 = 5h 已用百分比 */
+.edge-quota-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.edge-quota-fill {
+  height: 100%;
+  border-radius: 0 1px 1px 0;
+}
+
+/* 左右贴边:SVG 扇形楔形(从圆心辐射等角切分;区域小不放文字,悬停有提示)。
+   与顶部同一套状态语言:亮度/动效表达状态,颜色只表身份。
+   独立类名:HTML 条的盒模型样式不可作用到 SVG 元素(否则 Chromium 不渲染) */
+.edge-tab .edge-svg {
+  pointer-events: none; /* SVG 根不拦截事件,悬停/拖拽落到楔形上 */
+}
+
+.edge-wedge {
+  stroke: rgba(15, 17, 22, 0.9);
+  stroke-width: 1;
+  transition: opacity 0.3s ease;
+}
+
+.edge-wedge.st-working {
+  animation: seg-breathe 4s ease-in-out infinite;
+}
+
+.edge-wedge.st-waiting {
+  animation: seg-blink 1.2s ease-in-out infinite;
+}
+
+/* 出错:SVG 不支持 box-shadow,用红描边圈表达 */
+.edge-wedge.st-error {
+  stroke: #f87171;
+  stroke-width: 2;
+  animation: seg-blink 0.9s ease-in-out infinite;
+}
+
+.edge-wedge.st-idle {
+  opacity: 0.45;
+}
+
+.edge-wedge.st-offline {
+  opacity: 0.18;
+}
+
+/* 左右贴边:额度进度沿半圆外沿的弧线绘制(SVG 描边,弧长 ∝ 已用百分比)。
+   弧线与容器轮廓同曲线,描边 3px 的一半被裁切,可见约 1.5px 贴边 */
+.edge-arc {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: butt;
+}
+
+.edge-arc-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.14);
+  stroke-width: 3;
 }

@@ -14,7 +14,7 @@
       {
         "label": "island",
         "title": "AgentTracker",
-        "width": 480,
+        "width": 360,
         "height": 48,
         "decorations": false,
         "alwaysOnTop": true,
@@ -31,6 +31,18 @@
         "height": 600,
         "visible": false,
         "resizable": false,
+        "center": true
+      },
+      {
+        "label": "report",
+        "title": "AgentTracker 报表",
+        "url": "index.html#report",
+        "width": 940,
+        "height": 680,
+        "minWidth": 760,
+        "minHeight": 520,
+        "visible": false,
+        "resizable": true,
         "center": true
       }
     ],

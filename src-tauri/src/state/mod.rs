@@ -10,8 +10,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionState {
-    /// 已启动但尚无活动信号
-    Online,
     /// 工作中(呼吸绿)
     Working,
     /// 回合完成/空闲(常亮绿)
@@ -83,7 +81,8 @@ pub struct SessionSignals {
 ///
 /// 优先级:error(限流消息/最近错误)> hooks 事件 > 活动启发式 > 进程枚举。
 /// 看门狗:hooks 给出 working 但超 WATCHDOG_MS 无任何新信号 → 回落 idle。
-/// 注:额度耗尽(5h 100%)的标红由 service 层在快照组装后统一后处理(产品口径)。
+/// 注:额度耗尽(5h 100%)不改写会话状态(M1-6)——service 层产出快照级
+/// quota_exhausted 标志,由前端驱动胶囊/贴边标签变红,会话状态保持真实值。
 pub fn compute_state(sig: &SessionSignals, now: i64) -> SessionState {
     // ① error 判定(不受看门狗影响)
     if let Some(msg) = sig.notification_message.as_deref() {

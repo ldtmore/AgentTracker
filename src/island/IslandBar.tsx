@@ -29,11 +29,16 @@ export function quotaLevel(
 export default function IslandBar({
   snap,
   thresholds,
+  onToggle,
 }: {
   snap: IslandSnapshot | null;
   thresholds: Thresholds;
+  /** 悬停展开关闭时:点击胶囊切换信息卡片展开/收起 */
+  onToggle?: () => void;
 }) {
-  const meta = snap ? ISLAND_META[snap.island] : ISLAND_META.no_sessions;
+  // 额度耗尽时胶囊整体按出错态展示(会话状态本身保持真实值)
+  const islandState = snap?.quota_exhausted ? "any_error" : snap?.island;
+  const meta = snap ? ISLAND_META[islandState ?? "no_sessions"] : ISLAND_META.no_sessions;
   const working = snap?.sessions.filter((s) => s.state === "working").length ?? 0;
   const total = snap?.sessions.length ?? 0;
   const q5h = snap?.quotas.find(
@@ -44,7 +49,11 @@ export default function IslandBar({
     q5hPct != null ? ` quota-${quotaLevel(q5hPct, thresholds.warn, thresholds.danger)}` : "";
 
   return (
-    <div className="island" data-tauri-drag-region>
+    <div
+      className={`island${onToggle ? " island-clickable" : ""}`}
+      data-tauri-drag-region
+      onClick={onToggle}
+    >
       <span className={`dot ${meta.dot}`} data-tauri-drag-region />
       <span className="island-text" data-tauri-drag-region>
         {snap

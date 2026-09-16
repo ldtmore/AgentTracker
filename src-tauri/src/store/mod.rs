@@ -122,20 +122,37 @@ impl Store {
         );
     }
 
-    /// 幂等插入用量流水:返回实际新插入行数(重复行被 IGNORE)
+    /// 幂等插入用量流水:同幂等键(agent+session+ts+model)冲突时,仅当新行四项
+    /// 用量合计更大才整行覆盖——与 Claude Code"同消息保留最大快照"口径一致,
+    /// 跨 tick 重采到更完整的流式快照时能原地升级而非被 INSERT OR IGNORE 顶掉;
+    /// 返回实际变更行数(新插入或覆盖)
     pub fn insert_usage(&self, rows: &[UsageRow]) -> usize {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction().unwrap();
-        let mut inserted = 0usize;
+        let mut changed = 0usize;
         for r in rows {
             let n = tx
                 .execute(
-                    "INSERT OR IGNORE INTO usage_records(
+                    "INSERT INTO usage_records(
                        session_id, agent, model, provider, ts,
                        input_tokens, output_tokens, reasoning_tokens,
                        cache_read_tokens, cache_creation_tokens,
                        duration_ms, ttft_ms, error_type)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                     ON CONFLICT(agent, session_id, ts, model) DO UPDATE SET
+                       input_tokens = excluded.input_tokens,
+                       output_tokens = excluded.output_tokens,
+                       reasoning_tokens = excluded.reasoning_tokens,
+                       cache_read_tokens = excluded.cache_read_tokens,
+                       cache_creation_tokens = excluded.cache_creation_tokens,
+                       duration_ms = excluded.duration_ms,
+                       ttft_ms = excluded.ttft_ms,
+                       error_type = excluded.error_type
+                     WHERE (COALESCE(excluded.input_tokens,0) + COALESCE(excluded.output_tokens,0)
+                          + COALESCE(excluded.cache_read_tokens,0) + COALESCE(excluded.cache_creation_tokens,0))
+                           >
+                           (COALESCE(input_tokens,0) + COALESCE(output_tokens,0)
+                          + COALESCE(cache_read_tokens,0) + COALESCE(cache_creation_tokens,0))",
                     params![
                         r.session_id, r.agent, r.model, r.provider, r.ts,
                         r.input_tokens, r.output_tokens, r.reasoning_tokens,
@@ -144,10 +161,10 @@ impl Store {
                     ],
                 )
                 .unwrap_or(0);
-            inserted += n;
+            changed += n;
         }
         tx.commit().unwrap();
-        inserted
+        changed
     }
 
     /// 插入额度快照
@@ -281,6 +298,132 @@ impl Store {
     }
 }
 
+// ===== 报表聚合查询(M1-1) =====
+
+/// 按日聚合用量(日界取本机时区,由 SQLite 'localtime' 修饰符读 OS 时区)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DayUsage {
+    pub day: String, // "2026-09-17"
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
+}
+
+/// 按单一维度(模型/供应商)聚合的 token 总量(四项全口径)
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SliceUsage {
+    pub label: String,
+    pub total: i64,
+}
+
+/// 热力图单元:星期×小时的 token 总量
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HeatCell {
+    pub weekday: i32, // 0=周日 … 6=周六(SQLite strftime %w)
+    pub hour: i32,    // 0–23
+    pub total: i64,
+}
+
+/// 报表时间范围起点(days<=0 表示全部历史;否则 days 天前的毫秒时间戳)
+fn range_cutoff(days: i64) -> i64 {
+    if days <= 0 {
+        return 0;
+    }
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64 - days * 86_400_000)
+        .unwrap_or(0)
+}
+
+impl Store {
+    /// 报表:按日聚合,四项用量分列(趋势图堆叠用)
+    pub fn report_daily(&self, days: i64) -> Vec<DayUsage> {
+        let conn = self.conn.lock().unwrap();
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT date(ts/1000,'unixepoch','localtime') AS d,
+                    SUM(COALESCE(input_tokens,0)), SUM(COALESCE(output_tokens,0)),
+                    SUM(COALESCE(cache_read_tokens,0)), SUM(COALESCE(cache_creation_tokens,0))
+             FROM usage_records WHERE ts >= ?1 GROUP BY d ORDER BY d",
+        ) else {
+            return vec![];
+        };
+        let rows = stmt.query_map([range_cutoff(days)], |r| {
+            Ok(DayUsage {
+                day: r.get(0)?,
+                input: r.get(1)?,
+                output: r.get(2)?,
+                cache_read: r.get(3)?,
+                cache_creation: r.get(4)?,
+            })
+        });
+        match rows {
+            Ok(it) => it.filter_map(|x| x.ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    /// 报表:按模型聚合占比
+    pub fn report_by_model(&self, days: i64) -> Vec<SliceUsage> {
+        self.report_slice(days, "model")
+    }
+
+    /// 报表:按供应商聚合占比(provider 为 NULL 计入 'unknown')
+    pub fn report_by_provider(&self, days: i64) -> Vec<SliceUsage> {
+        self.report_slice(days, "provider")
+    }
+
+    /// 报表:按维度聚合内部实现(label_expr 仅允许内部传入列名,不接外部输入)。
+    /// 模型名按小写归一(本机历史数据存在 GLM-5.3/glm-5.3 大小写混用,避免切成两块)
+    fn report_slice(&self, days: i64, label_expr: &str) -> Vec<SliceUsage> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!(
+            "SELECT COALESCE(LOWER({label_expr}),'unknown') AS label,
+                    SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                       +COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0)) AS total
+             FROM usage_records WHERE ts >= ?1 GROUP BY label ORDER BY total DESC"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return vec![];
+        };
+        let rows = stmt.query_map([range_cutoff(days)], |r| {
+            Ok(SliceUsage {
+                label: r.get(0)?,
+                total: r.get(1)?,
+            })
+        });
+        match rows {
+            Ok(it) => it.filter_map(|x| x.ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    /// 报表:星期×小时用量热力图(本机时区)
+    pub fn report_heatmap(&self, days: i64) -> Vec<HeatCell> {
+        let conn = self.conn.lock().unwrap();
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT CAST(strftime('%w', ts/1000,'unixepoch','localtime') AS INTEGER),
+                    CAST(strftime('%H', ts/1000,'unixepoch','localtime') AS INTEGER),
+                    SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                       +COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0))
+             FROM usage_records WHERE ts >= ?1 GROUP BY 1,2",
+        ) else {
+            return vec![];
+        };
+        let rows = stmt.query_map([range_cutoff(days)], |r| {
+            Ok(HeatCell {
+                weekday: r.get(0)?,
+                hour: r.get(1)?,
+                total: r.get(2)?,
+            })
+        });
+        match rows {
+            Ok(it) => it.filter_map(|x| x.ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +483,26 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// 同幂等键多快照:仅四项合计更大的行才覆盖(与 CC 流式去重口径一致);
+    /// 更小快照重复采集不回退
+    #[test]
+    fn test_usage_upsert_keeps_max_snapshot() {
+        let path = tmp_db("upsert");
+        let store = Store::open(&path).unwrap();
+        // 首插:流式中途的小快照
+        assert_eq!(store.insert_usage(&[sample_usage(1_000)]), 1);
+        // 同键更大快照(流式写全):覆盖
+        let mut bigger = sample_usage(1_000);
+        bigger.input_tokens = Some(5_000);
+        assert_eq!(store.insert_usage(&[bigger]), 1);
+        // 库中为覆盖后的值(session_usage_total = input+output)
+        assert_eq!(store.session_usage_total("zcode:abc"), 5_200);
+        // 更小快照重复采到:不覆盖、不变更
+        assert_eq!(store.insert_usage(&[sample_usage(1_000)]), 0);
+        assert_eq!(store.session_usage_total("zcode:abc"), 5_200);
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn test_watermark_monotonic() {
         let path = tmp_db("wm");
@@ -366,6 +529,50 @@ mod tests {
         });
         let removed = store.cleanup_older_than(5_000);
         assert_eq!(removed, 2); // 1 条 usage + 1 条快照
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 报表聚合:模型/供应商/日/热力图;总量守恒与排序(TZ 无关断言为主)
+    #[test]
+    fn test_report_aggregates() {
+        let path = tmp_db("report");
+        let store = Store::open(&path).unwrap();
+        let row_sum = 4_200i64; // sample_usage 四项之和(1000+200+3000+0)
+        let r1 = sample_usage(1_000);
+        let mut r2 = sample_usage(2_000);
+        r2.session_id = "zcode:b".into();
+        r2.model = "glm-5.3-flash".into();
+        let r3 = sample_usage(200_000); // 与 r1 同模型不同会话/时间
+        store.insert_usage(&[r1.clone(), r2.clone(), r3]);
+
+        // 按模型:glm-5.3 两行合计在前(降序),flash 在后
+        let models = store.report_by_model(0);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].label, "glm-5.3");
+        assert_eq!(models[0].total, row_sum * 2);
+        assert_eq!(models[1].label, "glm-5.3-flash");
+        assert_eq!(models[1].total, row_sum);
+
+        // 按供应商:全部 glm → 单条
+        let providers = store.report_by_provider(0);
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].label, "glm");
+        assert_eq!(providers[0].total, row_sum * 3);
+
+        // 热力图:总量守恒,cell 落在合法范围
+        let heat = store.report_heatmap(0);
+        assert_eq!(heat.iter().map(|c| c.total).sum::<i64>(), row_sum * 3);
+        assert!(heat.iter().all(|c| (0..=6).contains(&c.weekday) && (0..=23).contains(&c.hour)));
+
+        // 按日:日字符串格式、总量守恒
+        let daily = store.report_daily(0);
+        assert!(!daily.is_empty());
+        let sum: i64 = daily
+            .iter()
+            .map(|d| d.input + d.output + d.cache_read + d.cache_creation)
+            .sum();
+        assert_eq!(sum, row_sum * 3);
+        assert!(daily.windows(2).all(|w| w[0].day < w[1].day), "按日升序");
         let _ = std::fs::remove_file(&path);
     }
 }

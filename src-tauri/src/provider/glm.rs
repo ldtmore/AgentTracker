@@ -177,7 +177,7 @@ fn parse_quota(body: &QuotaResponse) -> anyhow::Result<Vec<QuotaRow>> {
         // 已用百分比:官方 percentage 优先,缺失时按 usage/remaining 计算
         let used_percent = item
             .percentage
-            .or_else(|| calc_percent(item.usage, item.remaining, item.current_value));
+            .or_else(|| calc_percent(item.usage, item.remaining));
         out.push(QuotaRow {
             provider: "glm".into(),
             window_kind: kind.into(),
@@ -193,16 +193,17 @@ fn parse_quota(body: &QuotaResponse) -> anyhow::Result<Vec<QuotaRow>> {
     Ok(out)
 }
 
-/// percentage 缺失时的兜底:usage/remaining 或 currentValue 口径
-fn calc_percent(usage: Option<i64>, remaining: Option<i64>, current: Option<i64>) -> Option<f64> {
+/// percentage 缺失时的兜底:仅 usage/remaining 口径能换算出真实百分比;
+/// currentValue 是已用绝对量而非百分比,无 total 无法换算——宁缺毋滥返回
+/// None(UI 显示 "--"),不拿绝对量冒充百分比误导展示
+fn calc_percent(usage: Option<i64>, remaining: Option<i64>) -> Option<f64> {
     if let (Some(u), Some(r)) = (usage, remaining) {
         let total = u + r;
         if total > 0 {
             return Some((u as f64 / total as f64) * 100.0);
         }
     }
-    // currentValue 即已用绝对量,但无 total 时无法换算——返回已用值本身(仅作展示参考)
-    current.map(|c| c as f64)
+    None
 }
 
 #[cfg(test)]
@@ -237,9 +238,10 @@ mod tests {
 
     #[test]
     fn test_fallback_percent() {
-        assert_eq!(calc_percent(Some(16), Some(984), None), Some(1.6));
-        assert_eq!(calc_percent(None, None, Some(5)), Some(5.0));
-        assert_eq!(calc_percent(None, None, None), None);
+        assert_eq!(calc_percent(Some(16), Some(984)), Some(1.6));
+        // currentValue 绝对量不能冒充百分比:无法换算时返回 None
+        assert_eq!(calc_percent(None, None), None);
+        assert_eq!(calc_percent(Some(0), Some(0)), None);
     }
 
     /// 集成:真实调用 Monitor API(手动:cargo test -- --ignored)

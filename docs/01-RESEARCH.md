@@ -97,6 +97,38 @@
 4. 关键去重知识(后续维护必读):JSONL 同一 assistant 消息平均重复 ~3 次(流式快照/会话恢复复制),
    按 messageId 去重是底线;`<synthetic>` 模型行是本地合成消息,usage 为 0,过滤
 
+## 9. 报表页技术选型 ✅(2026-09-17,M1-1 开工前调研)
+
+- 🟢 **直接依赖 echarts@6.1.0**(npm 最新稳定,PLAN 预留的 6.x 兑现)。不引入
+  echarts-for-react 包装库(3.0.6 仍在维护,但它只做 init/dispose/resize 三件事,
+  手写标准配方约 30 行即可,少一个依赖;社区共识两种方式等价)
+- 🟡 **React 薄封装配方**(社区标准):挂载 echarts.init → 卸载 chart.dispose()*
+  → 容器 ResizeObserver 触发 chart.resize() → option 变更 getInstanceByDom().setOption()。
+  *不 dispose 泄漏 zrender 实例、不 resize 图表不填容器,两大新手坑
+- 🟢 **按需引入**(官方 handbook):`echarts/core` + `echarts/charts`{Line,Bar,Pie,Heatmap}Chart
+  + `echarts/components`{Grid/Tooltip/Legend/VisualMap} + CanvasRenderer,echarts.use() 注册
+- 🟢 **代码分割**:报表组件 React.lazy 动态导入——Tauri 各窗口共享同一份前端产物,
+  echarts 只有打开报表窗口才加载,岛窗口体积/启动内存不受影响
+- Tauri WebView2 兼容性:常规 Canvas 渲染无已知系统性问题(低风险,以屏幕实测为准)
+
+---
+
+## 10. Codex CLI 数据源勘察(2026-09-17,M1-3 第一步:源码级调研)
+
+基于 openai/codex 主分支源码(gh api + raw 拉取,基线 2026-09):
+
+| 项 | 结论 |
+|---|---|
+| 会话文件 | `~/.codex/sessions/rollout-<时间戳>-<thread_id>.jsonl`(append-only;另有归档子目录) |
+| 行结构 | JSONL:`{timestamp, type, payload}`;type ∈ session_meta / response_item / event_msg / compacted 等 |
+| token 用量 | event_msg → `TokenCount` 事件:TokenUsage = input_tokens / cached_input_tokens / cache_write_input_tokens / output_tokens / reasoning_output_tokens / total_tokens;并有 turn/thread 级聚合 |
+| 会话元数据 | `session_meta`(SessionMeta:thread 级 id/cwd 等,跨 revert 稳定) |
+| ⚠️ 新变数 | 新版出现 codex-state **SQLite 状态库**(SqliteConfig,线程列表可从状态库读)——JSONL 仍是 replay 权威源;状态库或为 M2+ 更优读取面,待实测 |
+| 适配器方案 | 与 Claude Code 适配器同构:扫描 sessions/*.jsonl → 逐行解析 → token_count 事件按 response_id 幂等入库;thread_id 作 session id;session_meta 取 cwd |
+| 🔴 待实测 | ①token_count 在 JSONL 的确切 payload 字段大小写/嵌套;②session_meta 是否含 model/cwd;③SQLite 状态库的实际角色(版本相关)——**需一台装有 Codex 的机器取真实样本**,所有者尚未安装 |
+
+适配器实现(实现 AgentAdapter trait)待所有者实际使用 Codex 后进行(无真实数据不可验证)。
+
 ---
 
 ## 调研日志
@@ -105,3 +137,5 @@
 |---|---|
 | 2026-09-16 | §1 ZCode 勘察完成(决定性);§2/§3 基于早期调研归档 |
 | 2026-09-16 | §4 轮子盘点完成(全🟢);§5 确认 Tauri 无现成岛→自建;§6 hooks 改实测策略;§7 GLM 响应格式源码级确认——**阶段 2 调研收官** |
+| 2026-09-17 | §9 报表页选型完成(echarts@6.1.0 直用+按需引入+lazy 分割),M1-1 开工 |
+| 2026-09-17 | §10 Codex CLI 源码级勘察完成(sessions/*.jsonl + TokenCount 事件),适配器待实测后开发,M1-3 第一步收官 |

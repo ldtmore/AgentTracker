@@ -50,6 +50,8 @@ pub struct IslandSnapshot {
     pub sessions: Vec<SessionView>,
     pub island: IslandState,
     pub quotas: Vec<QuotaView>,
+    /// GLM 5h 额度已耗尽(100%):不改写会话状态,由前端驱动胶囊变红/标签红光
+    pub quota_exhausted: bool,
     pub generated_at: i64,
 }
 
@@ -71,19 +73,22 @@ impl Aggregator {
             .get_setting("hook_events_offset")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
-        // GLM 凭据优先级:应用设置 > 环境变量 > claude-menu suppliers.json(T11)
-        let glm = if let (Some(base), Some(token)) = (
+        // GLM 凭据优先级:应用设置(token 非空才生效)> 环境变量 > claude-menu
+        // suppliers.json;设置页"留空则继续沿用"= token 为空时回落自动发现链
+        let (glm, source) = match (
             store.get_setting("glm_base"),
             store.get_setting("glm_token"),
         ) {
-            if !base.is_empty() && !token.is_empty() {
-                Some(GlmProvider::new(&base, &token))
-            } else {
-                None
+            (Some(base), Some(token)) if !base.is_empty() && !token.is_empty() => {
+                (Some(GlmProvider::new(&base, &token)), "应用设置".to_string())
             }
-        } else {
-            GlmProvider::discover().map(|c| GlmProvider::new(&c.base, &c.token))
+            _ => match GlmProvider::discover() {
+                Some(c) => (Some(GlmProvider::new(&c.base, &c.token)), c.source.to_string()),
+                None => (None, String::new()),
+            },
         };
+        // 记录凭据来源供设置页展示"(当前:xxx)";无凭据时清除旧记录
+        store.set_setting("glm_token_source", &source);
         Self {
             store,
             zcode: ZcodeAdapter::new(),
@@ -131,12 +136,28 @@ impl Aggregator {
         // ② 进程枚举兜底(L0:区分 idle 与 offline)
         let (zcode_alive, claude_alive) = probe_processes();
 
-        // ③ 采集两个 Agent 的会话与用量
+        // ③ 采集已勾选 Agent 的会话与用量(设置页 agents_enabled:勾选才采集/监控/展示,
+        //    不勾选则完全不处理;设置键不存在时默认全部启用——兼容升级与首次运行)
+        let enabled: Option<std::collections::HashSet<String>> = self
+            .store
+            .get_setting("agents_enabled")
+            .and_then(|raw| serde_json::from_str(&raw).ok());
+        let is_enabled =
+            |id: &str| match &enabled {
+                Some(set) => set.contains(id),
+                None => true,
+            };
+
         let mut views: Vec<SessionView> = vec![];
-        for (agent_id, info_list) in [
-            ("zcode", self.zcode.scan_sessions().unwrap_or_default()),
-            ("claude-code", self.cc.scan_sessions().unwrap_or_default()),
-        ] {
+        for agent_id in ["zcode", "claude-code"] {
+            if !is_enabled(agent_id) {
+                continue;
+            }
+            let info_list = if agent_id == "zcode" {
+                self.zcode.scan_sessions().unwrap_or_default()
+            } else {
+                self.cc.scan_sessions().unwrap_or_default()
+            };
             let adapter: &dyn AgentAdapter = if agent_id == "zcode" {
                 &self.zcode
             } else {
@@ -218,18 +239,13 @@ impl Aggregator {
             }
         }
 
-        // ⑤ 额度耗尽信号回填 error(5h 窗口 100% 时,活跃会话标红)
+        // ⑤ 额度耗尽检测(5h 窗口 100%):只产出快照级标志位,不改写会话状态——
+        // 会话状态被统一改成 Error 会让贴边标签的分段全变一色,丢失 Agent 区分度;
+        // 额度告警由前端表达(胶囊变红/标签红光/额度弧线红)
         let quotas = self.store.latest_quotas();
-        let exhausted = quotas
+        let quota_exhausted = quotas
             .iter()
             .any(|q| q.provider == "glm" && q.window_kind == "5h" && q.used_percent >= Some(100.0));
-        if exhausted {
-            for v in views.iter_mut() {
-                if matches!(v.state, SessionState::Working | SessionState::Idle | SessionState::Online) {
-                    v.state = SessionState::Error;
-                }
-            }
-        }
 
         let island = aggregate(&views.iter().map(|v| v.state).collect::<Vec<_>>());
         let quota_views = quotas
@@ -240,6 +256,7 @@ impl Aggregator {
             sessions: views,
             island,
             quotas: quota_views,
+            quota_exhausted,
             generated_at: now,
         }
     }
@@ -258,7 +275,9 @@ fn probe_processes() -> (bool, bool) {
             z = true;
         }
         // claude CLI 是 npm shim,真实进程名为 node.exe,名字不含 claude(R3),
-        // 须查命令行;claude-menu(菜单工具)与本工具自身不算;原生 exe 形态名字即命中
+        // 须查命令行;claude-menu(菜单工具)、本工具自身、hook-bridge(hook 桥的
+        // node 进程,路径含 ".claude",寿命 ≤2s)均不算,防止已退出的会话被误判存活;
+        // 原生 exe 形态名字即命中
         let cmd = proc
             .cmd()
             .iter()
@@ -268,6 +287,7 @@ fn probe_processes() -> (bool, bool) {
         if (n.contains("claude") || cmd.contains("claude"))
             && !cmd.contains("claude-menu")
             && !cmd.contains("agenttracker")
+            && !cmd.contains("hook-bridge")
         {
             c = true;
         }

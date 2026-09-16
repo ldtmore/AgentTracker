@@ -1,0 +1,102 @@
+/* 报表页样式(常规窗口,深色科技风,与设置页同族) */
+
+.rp-root {
+  box-sizing: border-box;
+  /* 自身作为滚动容器(与设置页同模式):全局 App.css 对 body 设了 overflow:hidden,
+     内容超出窗口高度时由 .rp-root 出滚动条 */
+  height: 100vh;
+  overflow-y: auto;
+  background: #141418;
+  color: #e8eaf0;
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 13px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 滚动条:与设置页/岛面板同款(6px 细条半透明,悬停加亮) */
+.rp-root::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rp-root::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rp-root::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.rp-root::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.rp-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.rp-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.rp-ranges {
+  display: flex;
+  gap: 6px;
+}
+
+.rp-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #e8eaf0;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.rp-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.rp-btn.active {
+  background: #10b981dd;
+  border-color: #10b981;
+}
+
+.rp-card {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 12px 14px 6px;
+}
+
+.rp-card-title {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-bottom: 6px;
+}
+
+.rp-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.rp-empty {
+  color: #6b7280;
+  text-align: center;
+  padding: 60px 0;
+}
+
+.rp-foot {
+  font-size: 11px;
+  color: #6b7280;
+  padding-bottom: 4px;
+}

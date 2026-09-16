@@ -2,7 +2,7 @@
 
 > 主流 AI Agent 的旁路观测台:灵动岛实时监控各 Agent 工作状态,统计大模型 token 消耗与额度——只看,不碰。
 
-[![status](https://img.shields.io/badge/status-M0_收尾(T0–T11完成,_T12验收中)-blue)](docs/03-TASKS.md)
+[![status](https://img.shields.io/badge/status-M1_进行中(报表页·贴边自动隐藏·审查修复完成)-blue)](docs/03-TASKS.md)
 [![tauri](https://img.shields.io/badge/Tauri-2-orange)](https://tauri.app)
 [![rust](https://img.shields.io/badge/Rust-stable-success)](https://www.rust-lang.org)
 

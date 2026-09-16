@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { IslandSnapshot, SessionView, Thresholds } from "../shared/types";
-import { SESSION_META, fmtCountdown, fmtTokens } from "../shared/types";
+import { SESSION_META, agentColor, fmtCountdown, fmtTokens } from "../shared/types";
 import { quotaLevel } from "./IslandBar";
 
 /** Agent 徽标文字 */
@@ -19,9 +19,8 @@ const ACTIVE_FIRST: Record<string, number> = {
   error: 0,
   waiting: 1,
   working: 2,
-  online: 3,
-  idle: 4,
-  offline: 5,
+  idle: 3,
+  offline: 4,
 };
 
 function sortSessions(list: SessionView[]): SessionView[] {
@@ -43,7 +42,10 @@ function SessionCard({ s }: { s: SessionView }) {
   return (
     <div className="card" data-session-id={s.id} onClick={focus}>
       <span className={`dot ${meta.dot}`} />
-      <span className="card-badge">{AGENT_BADGE[s.agent] ?? "??"}</span>
+      {/* 徽标底色 = Agent 身份色(与贴边隐藏态色块一致,颜色即身份) */}
+      <span className="card-badge" style={{ background: agentColor(s.agent) }}>
+        {AGENT_BADGE[s.agent] ?? "??"}
+      </span>
       <span className="card-model">{s.model ?? "--"}</span>
       <span className="card-project" title={s.project_dir ?? ""}>
         {project || "--"}
