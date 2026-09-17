@@ -73,11 +73,43 @@ static SLIDE_GEN: AtomicU64 = AtomicU64::new(0);
 #[tauri::command]
 fn focus_session(session_id: String, store: tauri::State<'_, Arc<Store>>) -> bool {
     let Some((agent, project_dir)) = store.get_session_meta(&session_id) else {
+        // 点击跳转无反应的根因之一：会话不在自库（扫描截断/未采集到）
+        log::debug!("[跳转] 会话元数据缺失（库里查不到）：{session_id}");
         return false;
     };
-    commands::find_session_window(&agent, project_dir.as_deref())
+    let ok = commands::find_session_window(&agent, project_dir.as_deref())
         .map(commands::activate_window)
-        .unwrap_or(false)
+        .unwrap_or(false);
+    // 窗口找到了但激活失败（SetForegroundWindow 可能被系统拒绝）单独留痕
+    if !ok {
+        log::debug!("[跳转] 窗口已找到但激活失败：agent={agent} session={session_id}");
+    }
+    ok
+}
+
+// ===== 前端日志通道（2026-09-17 埋点审查 P2） =====
+
+/// 前端日志级别白名单（防任意字符串透传）
+const FRONTEND_LEVELS: &[&str] = &["error", "warn", "info", "debug"];
+
+/// 前端（webview）日志落文件：全局 onerror / unhandledrejection / ErrorBoundary
+/// 与关键交互手动埋点统一走这里。窗口名取自 Tauri 窗口 label（前端不用传），
+/// target 固定 frontend，与 Rust 侧日志同一文件同一格式。
+#[tauri::command]
+fn log_frontend(win: tauri::WebviewWindow, level: String, message: String) {
+    if !FRONTEND_LEVELS.contains(&level.as_str()) {
+        return; // 白名单外的级别直接丢弃（防御异常输入）
+    }
+    // 按字符截断到 1024：防异常对象序列化出巨串刷爆日志
+    //（不能按字节切——撕裂 UTF-8 会 panic，日志通道内绝不允许 panic）
+    let message: String = message.chars().take(1024).collect();
+    let lvl = match level.as_str() {
+        "error" => log::Level::Error,
+        "warn" => log::Level::Warn,
+        "info" => log::Level::Info,
+        _ => log::Level::Debug,
+    };
+    log::log!(target: "frontend", lvl, "[{}] {}", win.label(), message);
 }
 
 // ===== 设置页 commands（T11） =====
@@ -95,6 +127,7 @@ const SETTING_KEYS_ALLOW: &[&str] = &[
     "agents_enabled",
     "agent_colors",
     "theme",
+    "dev_mode",
 ];
 
 /// 读取全部设置。
@@ -113,6 +146,17 @@ fn set_setting(key: String, value: String, store: tauri::State<'_, Arc<Store>>) 
         return Err(format!("不允许写入设置键：{key}"));
     }
     store.set_setting(&key, &value);
+    // 设置变更留痕（info：低频关键事件，事后排障不依赖用户提前开开发者模式；
+    // API Key 绝不落明文——日志文件会被用户分享出去，只记长度）
+    if key == "glm_token" {
+        log::info!("[设置] glm_token 已更新（长度 {} 字符）", value.len());
+    } else {
+        log::info!("[设置] {key} = {value}");
+    }
+    // 开发者模式即时切换日志级别（免重启）
+    if key == "dev_mode" {
+        logging::set_verbose(value == "1");
+    }
     Ok(())
 }
 
@@ -126,13 +170,20 @@ fn hooks_status() -> bool {
 /// async 标记：文件 IO 移出主线程，不阻塞事件循环（Tauri 语义，审查 2.2.1）
 #[tauri::command(async)]
 fn install_hooks() -> Result<usize, String> {
-    collector::claude_code::install_hooks().map_err(|e| e.to_string())
+    // 失败留痕：settings.json 被占用等失败原因只在错误链里，前端 toast 转瞬即逝
+    collector::claude_code::install_hooks().map_err(|e| {
+        log::error!("hooks 注入失败：{e:#}");
+        e.to_string()
+    })
 }
 
 /// 卸载 hooks（还原 settings.json）；async 标记理由同上
 #[tauri::command(async)]
 fn uninstall_hooks() -> Result<usize, String> {
-    collector::claude_code::uninstall_hooks().map_err(|e| e.to_string())
+    collector::claude_code::uninstall_hooks().map_err(|e| {
+        log::error!("hooks 卸载失败：{e:#}");
+        e.to_string()
+    })
 }
 
 /// 开机自启状态
@@ -149,10 +200,17 @@ fn autostart_get(app: tauri::AppHandle) -> Result<bool, String> {
 fn autostart_set(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
     let al = app.autolaunch();
-    if enable {
-        al.enable().map_err(|e| e.to_string())
-    } else {
-        al.disable().map_err(|e| e.to_string())
+    let result = if enable { al.enable() } else { al.disable() };
+    match result {
+        // 低频关键事件走 info（同设置变更：事后排障不依赖开发者模式）
+        Ok(()) => {
+            log::info!("[设置] 开机自启已{}", if enable { "开启" } else { "关闭" });
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("[设置] 开机自启{}失败：{e}", if enable { "开启" } else { "关闭" });
+            Err(e.to_string())
+        }
     }
 }
 
@@ -192,7 +250,10 @@ where
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || query(&store))
         .await
-        .map_err(|e| format!("报表查询任务失败：{e}"))
+        .map_err(|e| {
+            log::warn!("[报表] 查询任务失败：{e}");
+            format!("报表查询任务失败：{e}")
+        })
 }
 
 /// 报表：按日聚合用量（days<=0 表示全部历史，下同）
@@ -482,6 +543,12 @@ fn peek_apply(
     }
     let scale = mon.scale_factor();
     slide_to(&win, to, scale, motion, 8);
+    log::debug!(
+        "[岛] {}：edge={} 落点 {:?}",
+        if hide { "滑出隐藏" } else { "滑回显示" },
+        edge,
+        to
+    );
     let m = motion.lock().unwrap();
     let _ = app.emit_to(
         ISLAND,
@@ -549,6 +616,8 @@ fn apply_snap(
         docked
     };
     slide_to(&win, to, scale, motion, 8);
+    // 状态迁移留痕（排障主线索："岛不贴边/位置不对/消失"靠它重建时间线）
+    log::debug!("[岛] 拖放吸附：edge={} hidden={} 落点 {:?}", edge, hide, to);
     let m = motion.lock().unwrap();
     let _ = app.emit_to(
         ISLAND,
@@ -591,18 +660,39 @@ pub fn run() {
             island_refresh,
             island_dock_state,
             island_drag_start,
-            island_metrics
+            island_metrics,
+            log_frontend
         ])
         .setup(|app| {
             // 自库：%APPDATA%\com.agenttrackerisland.app\agenttrackerisland.db
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
-            let store = Arc::new(Store::open(&dir.join("agenttrackerisland.db"))?);
-            app.manage(store.clone());
-
-            // 日志与 panic 钩子（审查 1.1）：一切降级/异常必须留痕可查
+            // 日志与 panic 钩子必须先于数据库打开初始化（2026-09-17 二次审查）：
+            // 数据库损坏/迁移失败导致"应用起不来"是最严重的故障，恰恰最需要留痕——
+            // 此前 init 排在其后，启动失败完全无痕
             logging::init(&dir.join("logs"));
             logging::install_panic_hook();
+            let store = match Store::open(&dir.join("agenttrackerisland.db")) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    log::error!("数据库打开/迁移失败，应用无法启动：{e:#}");
+                    return Err(e.into());
+                }
+            };
+            app.manage(store.clone());
+            // 恢复开发者模式（设置页开关：Debug 级细节日志，即时生效）
+            if store.get_setting("dev_mode").as_deref() == Some("1") {
+                logging::set_verbose(true);
+            }
+            // 启动配置快照：排障时日志开头即见"程序当时认为的配置"，
+            // 与 [设置] 变更日志拼出完整配置时间线（敏感键不落日志）
+            log::debug!(
+                "[设置] 启动加载：autohide={}，hover={}，cleanup_days={}，agents={}",
+                store.get_setting("island_autohide").map(|v| v != "0").unwrap_or(true),
+                store.get_setting("hover_expand").map(|v| v != "0").unwrap_or(true),
+                store.get_setting("cleanup_days").unwrap_or_else(|| "365".into()),
+                store.get_setting("agents_enabled").unwrap_or_else(|| "全部启用".into()),
+            );
 
             let win = app
                 .get_webview_window(ISLAND)
@@ -703,6 +793,7 @@ pub fn run() {
                         );
                         // 同步内存隐藏态：否则 island_peek 会误判"未隐藏"，悬停滑入失效
                         motion.lock().unwrap().hidden = true;
+                        log::debug!("[岛] 启动恢复贴边隐藏：edge={edge} 停靠位 {:?}", docked);
                     }
                 }
             }
@@ -758,13 +849,19 @@ fn position_island(
     };
     let ml = monitor_logical(&mon);
     let width = island_width(ml.2);
-    let pos = match saved_pos(store) {
+    let remembered = saved_pos(store);
+    let pos = match remembered {
         Some(p) => (
             p.0.clamp(ml.0, ml.0 + ml.2 - width),
             p.1.clamp(ml.1, ml.1 + ml.3 - ISLAND_H),
         ),
         None => (ml.0 + (ml.2 - width) / 2, ml.1 + 6),
     };
+    log::debug!(
+        "[岛] 启动定位：落点 {:?}（{}）",
+        pos,
+        if remembered.is_some() { "记忆坐标" } else { "默认居中" }
+    );
     slide_to(win, pos, mon.scale_factor(), motion, 1);
 }
 
@@ -788,9 +885,11 @@ fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
             "toggle" => {
                 if let Some(w) = app.get_webview_window(ISLAND) {
                     if w.is_visible().unwrap_or(false) {
-                        let _ = w.hide();
-                    } else {
-                        let _ = w.show();
+                        if let Err(e) = w.hide() {
+                            log::debug!("[岛] 托盘隐藏失败：{e}");
+                        }
+                    } else if let Err(e) = w.show() {
+                        log::debug!("[岛] 托盘显示失败：{e}");
                     }
                 }
             }

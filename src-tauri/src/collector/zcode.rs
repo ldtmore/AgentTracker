@@ -58,8 +58,15 @@ impl AgentAdapter for ZcodeAdapter {
 
     /// 扫描最近 90 天有活动、且有过模型调用的会话（纯观测会话无意义）
     fn scan_sessions(&self) -> anyhow::Result<Vec<SessionInfo>> {
-        let Ok(conn) = self.open() else {
-            return Ok(vec![]); // ZCode 未装/未跑：静默降级（红线④）
+        let conn = match self.open() {
+            Ok(c) => c,
+            Err(e) => {
+                // 库不存在 = ZCode 未装（预期降级，静默）；其余打开失败 debug 留痕
+                if self.db_path.exists() {
+                    log::debug!("[zcode] 库打开失败（本轮按空处理）：{e:#}");
+                }
+                return Ok(vec![]);
+            }
         };
         let cutoff = now_ms() - 90 * 24 * 3600 * 1000;
         let mut stmt = conn.prepare(
@@ -88,13 +95,34 @@ impl AgentAdapter for ZcodeAdapter {
                 last_usage_at: r.get::<_, Option<i64>>(6)?,
             })
         })?;
-        Ok(rows.filter_map(|x| x.ok()).collect())
+        // 行解析失败计数（Schema 漂移容忍，但持续失败需留痕排障）
+        let mut err_rows = 0usize;
+        let out = rows
+            .filter_map(|x| match x {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    err_rows += 1;
+                    None
+                }
+            })
+            .collect();
+        if err_rows > 0 {
+            log::debug!("[zcode] 扫描 {err_rows} 行解析失败已跳过（Schema 漂移？）");
+        }
+        Ok(out)
     }
 
     /// 水位增量读取 model_usage（列白名单，未知列忽略以容忍 Schema 漂移）
     fn collect_usage(&self, watermark_ts: i64) -> anyhow::Result<Vec<UsageRow>> {
-        let Ok(conn) = self.open() else {
-            return Ok(vec![]);
+        let conn = match self.open() {
+            Ok(c) => c,
+            Err(e) => {
+                // 库不存在 = ZCode 未装（预期降级，静默）；其余打开失败 debug 留痕
+                if self.db_path.exists() {
+                    log::debug!("[zcode] 库打开失败（本轮按空处理）：{e:#}");
+                }
+                return Ok(vec![]);
+            }
         };
         let mut stmt = conn.prepare(
             "SELECT session_id, model_id, started_at,
@@ -126,7 +154,20 @@ impl AgentAdapter for ZcodeAdapter {
                 error_type: r.get(10)?,
             })
         })?;
-        Ok(rows.filter_map(|x| x.ok()).collect())
+        let mut err_rows = 0usize;
+        let out = rows
+            .filter_map(|x| match x {
+                Ok(v) => Some(v),
+                Err(_) => {
+                    err_rows += 1;
+                    None
+                }
+            })
+            .collect();
+        if err_rows > 0 {
+            log::debug!("[zcode] 采集 {err_rows} 行解析失败已跳过（Schema 漂移？）");
+        }
+        Ok(out)
     }
 }
 

@@ -68,10 +68,12 @@ impl Store {
         if ver < 1 {
             conn.execute_batch(MIGRATION_0001)?;
             conn.pragma_update(None, "user_version", 1)?;
+            log::debug!("[存储] 迁移 0001 执行完成（首次建库）");
         }
         if ver < 2 {
             conn.execute_batch(MIGRATION_0002)?;
             conn.pragma_update(None, "user_version", 2)?;
+            log::debug!("[存储] 迁移 0002 执行完成（用量索引）");
         }
         Ok(())
     }
@@ -99,11 +101,13 @@ impl Store {
     /// 更新采集水位（仅前进，不回退）
     pub fn set_watermark(&self, agent: &str, ts: i64) {
         let conn = self.lock_conn();
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO watermarks(agent, last_ts) VALUES(?1, ?2)
              ON CONFLICT(agent) DO UPDATE SET last_ts = MAX(last_ts, excluded.last_ts)",
             params![agent, ts],
-        );
+        ) {
+            log::warn!("[存储] 水位写入失败（agent={agent}，下轮幂等重写）：{e}");
+        }
     }
 
     /// upsert 会话元数据（首见时间不覆盖，最新状态全量刷新）
@@ -121,7 +125,7 @@ impl Store {
         state_reason: Option<&str>,
     ) {
         let conn = self.lock_conn();
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO sessions(id, agent, provider, model, project_dir, title,
                                   first_seen_at, last_seen_at, state, state_reason)
              VALUES(?1,?2,?3,?4,?5,?6,?7,?7,?8,?9)
@@ -134,7 +138,9 @@ impl Store {
                state = excluded.state,
                state_reason = excluded.state_reason",
             params![id, agent, provider, model, project_dir, title, last_seen_at, state, state_reason],
-        );
+        ) {
+            log::warn!("[存储] 会话元数据写入失败（id={id}，下轮重写）：{e}");
+        }
     }
 
     /// 幂等插入用量流水：同幂等键（agent+session+ts+model）冲突时，仅当新行四项
@@ -196,11 +202,13 @@ impl Store {
     /// 插入额度快照
     pub fn insert_quota(&self, row: &QuotaRow) {
         let conn = self.lock_conn();
-        let _ = conn.execute(
+        if let Err(e) = conn.execute(
             "INSERT INTO quota_snapshots(provider, window_kind, used_percent, used_tokens, reset_at, fetched_at)
              VALUES(?1,?2,?3,?4,?5,?6)",
             params![row.provider, row.window_kind, row.used_percent, row.used_tokens, row.reset_at, row.fetched_at],
-        );
+        ) {
+            log::warn!("[存储] 额度快照写入失败（{} {}%，下轮重查补上）：{e}", row.window_kind, row.used_percent.unwrap_or(0.0) as i64);
+        }
     }
 
     /// 插入原始状态事件（hooks/采集审计）

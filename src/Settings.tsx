@@ -180,6 +180,8 @@ export default function Settings() {
   const [cleanupDays, setCleanupDays] = useState(CLEANUP_DEFAULT_DAYS);
   const [hooksOn, setHooksOn] = useState(false);
   const [hookBusy, setHookBusy] = useState(false); // 注入/卸载进行中，防连点
+  // 开发者模式（缺省=关；开启后 Rust 端即时切到 Debug 级日志，免重启）
+  const [devMode, setDevMode] = useState(false);
   const [autoStart, setAutoStart] = useState(false);
   // 灵动岛贴边自动隐藏（缺省=开，与 Rust 端 autohide_enabled 的默认一致）
   const [autoHide, setAutoHide] = useState(true);
@@ -220,6 +222,7 @@ export default function Settings() {
         if (s.glm_token_source) setTokenFrom(s.glm_token_source);
         if (s.island_autohide !== undefined) setAutoHide(s.island_autohide !== "0");
         if (s.hover_expand !== undefined) setHoverCard(s.hover_expand !== "0");
+        if (s.dev_mode !== undefined) setDevMode(s.dev_mode === "1");
         setThemeMode(asThemeMode(s.theme));
         if (s.agents_enabled) {
           try {
@@ -407,6 +410,12 @@ export default function Settings() {
     }
   };
 
+  /** 开发者模式：即存即生效（Rust 端 set_setting 命中后即时切换日志级别，免重启） */
+  const toggleDevMode = async (v: boolean) => {
+    setDevMode(v);
+    await saveKey("dev_mode", v ? "1" : "0");
+  };
+
   return (
     <div className="st-root">
       {toast && (
@@ -579,6 +588,12 @@ export default function Settings() {
           <button type="button" className="st-btn" disabled={hookBusy} onClick={toggleHooks}>
             {hookBusy ? "处理中…" : hooksOn ? "卸载还原" : "注入 hooks"}
           </button>
+        </Row>
+        <Row
+          title="开发者模式"
+          desc="记录更详细的程序日志便于排障，正常使用无需开启"
+        >
+          <Switch checked={devMode} onChange={toggleDevMode} />
         </Row>
       </Section>
     </div>

@@ -32,14 +32,31 @@ pub struct GlmCreds {
 }
 
 impl GlmProvider {
+    /// API origin 只读访问（日志留痕用，如"凭据来源 + 哪个平台"）
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
     pub fn new(base: &str, token: &str) -> Self {
+        // 客户端构建失败（极罕见，TLS 后端问题）降级重试一次；仍失败才退到无超时的
+        // 默认客户端并留痕——宪法要求所有外呼有超时，此处为构建层的最后兜底
+        // （2026-09-17 埋点审查：原实现静默降级，外呼可能永久挂起且无痕）
+        let http = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .or_else(|_| {
+                reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+            })
+            .unwrap_or_else(|e| {
+                log::warn!("[额度] HTTP 客户端构建失败，降级为无超时默认客户端（外呼可能挂起）：{e}");
+                reqwest::blocking::Client::new()
+            });
         Self {
             base: base.trim_end_matches('/').to_string(),
             token: token.to_string(),
-            http: reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(5))
-                .build()
-                .unwrap_or_else(|_| reqwest::blocking::Client::new()),
+            http,
         }
     }
 

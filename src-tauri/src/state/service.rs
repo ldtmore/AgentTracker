@@ -89,6 +89,12 @@ pub struct Aggregator {
     last_probe_ms: i64,
     /// 连续采集失败轮数（degraded 判定输入）
     fail_streak: u32,
+    /// 最近一次采集错误描述（degraded 根因留痕用；成功轮清空）
+    last_error: Option<String>,
+    /// 上轮会话状态缓存（首见/迁移/消失留痕用；内存态，重启后首轮视为全量首见）
+    last_states: HashMap<String, SessionState>,
+    /// 上轮额度耗尽标志（翻转留痕用）
+    last_quota_exhausted: bool,
 }
 
 impl Aggregator {
@@ -115,6 +121,12 @@ impl Aggregator {
         store.set_setting("glm_token_source", &source);
         if glm.is_none() {
             log::info!("GLM 凭据未配置：额度功能区停用（设置页可配置，或走自动发现链）");
+        } else {
+            // 凭据来源留痕（debug）：额度查不到时先看走的是哪条链、哪个平台
+            log::debug!(
+                "[额度] 凭据来源：{source}，base={}",
+                glm.as_ref().map(|g| g.base()).unwrap_or("")
+            );
         }
         Self {
             store,
@@ -126,19 +138,28 @@ impl Aggregator {
             probe_cache: (false, false),
             last_probe_ms: 0,
             fail_streak: 0,
+            last_error: None,
+            last_states: HashMap::new(),
+            last_quota_exhausted: false,
         }
     }
 
     /// 执行一轮采集+融合，返回岛快照
     pub fn tick(&mut self) -> IslandSnapshot {
         let now = now_ms();
+        // 本轮计时与异常收集（tick 摘要输出，开发者模式排障主线索）
+        let t0 = std::time::Instant::now();
         let mut had_error = false;
+        let mut last_err: Option<String> = None;
+        let mut hook_events_consumed = 0usize;
+        let mut collect_stats: Vec<String> = vec![];
 
         // ① hooks 事件增量（claude-code；文件不存在=未安装增强档，静默降级）
         let mut last_hooks: HashMap<String, (String, i64, Option<String>)> = HashMap::new();
         if let Some(path) = hook_events::events_file_path() {
             match hook_events::read_events(&path, self.hook_offset) {
                 Ok((events, new_off)) => {
+                    hook_events_consumed = events.len();
                     // 偏移无推进时免写库（R9，每 10s 一次的空写没必要）
                     if new_off != self.hook_offset {
                         self.store.set_setting("hook_events_offset", &new_off.to_string());
@@ -177,13 +198,26 @@ impl Aggregator {
                 Err(e) => {
                     log::warn!("hook 事件文件读取失败（本轮按无事件处理）：{e:#}");
                     had_error = true;
+                    last_err = Some(format!("hook 事件读取失败：{e:#}"));
                 }
             }
         }
 
         // ② 进程枚举兜底（L0：区分 idle 与 offline；30s 一探，结果缓存复用）
         if now - self.last_probe_ms >= PROBE_INTERVAL_MS {
-            self.probe_cache = probe_processes(&mut self.sys);
+            let fresh = probe_processes(&mut self.sys);
+            // 存活翻转留痕：offline 误判/状态跳变排障的关键线索
+            //（进程名启发式是已知易错点，见 probe_processes 注释）
+            if fresh != self.probe_cache {
+                log::debug!(
+                    "[进程] 存活探测翻转：zcode {}→{}，claude {}→{}",
+                    self.probe_cache.0,
+                    fresh.0,
+                    self.probe_cache.1,
+                    fresh.1
+                );
+            }
+            self.probe_cache = fresh;
             self.last_probe_ms = now;
         }
         let (zcode_alive, claude_alive) = self.probe_cache;
@@ -204,6 +238,8 @@ impl Aggregator {
         for ad in &self.adapters {
             let agent_id = ad.id();
             if !is_enabled(agent_id) {
+                // 禁用的适配器：清掉其会话观测缓存（用户主动关闭不算"会话消失"）
+                self.last_states.retain(|k, _| !k.starts_with(agent_id));
                 continue;
             }
             let info_list = match ad.scan_sessions() {
@@ -211,9 +247,24 @@ impl Aggregator {
                 Err(e) => {
                     log::warn!("[{agent_id}] 会话扫描失败（本轮按空处理）：{e:#}");
                     had_error = true;
+                    last_err = Some(format!("[{agent_id}] 会话扫描失败：{e:#}"));
                     vec![]
                 }
             };
+            // 会话消失检测：上轮有、本轮无（90 天 cutoff / 截断 / 会话结束都会导致）——
+            // "会话不见了"报障的时间线线索（埋点审查 2026-09-17 二次补强）
+            let current_ids: std::collections::HashSet<&str> =
+                info_list.iter().map(|i| i.id.as_str()).collect();
+            let gone: Vec<String> = self
+                .last_states
+                .keys()
+                .filter(|k| k.starts_with(agent_id) && !current_ids.contains(k.as_str()))
+                .cloned()
+                .collect();
+            for id in &gone {
+                self.last_states.remove(id);
+                log::debug!("[{agent_id}] 会话从观测列表消失：{id}");
+            }
             // 增量用量入库 + 水位推进（水位带 60s 安全余量，R4）
             let watermark = self
                 .store
@@ -224,10 +275,17 @@ impl Aggregator {
                 Err(e) => {
                     log::warn!("[{agent_id}] 用量采集失败（本轮按空处理）：{e:#}");
                     had_error = true;
+                    last_err = Some(format!("[{agent_id}] 用量采集失败：{e:#}"));
                     vec![]
                 }
             };
-            self.store.insert_usage(&usage);
+            let inserted = self.store.insert_usage(&usage);
+            // 本适配器轮次统计（tick 摘要输出用）：采集行数/入库变更/水位推进一览
+            collect_stats.push(format!(
+                "{agent_id}：会话 {}，采到 {} 行入库 {inserted}",
+                info_list.len(),
+                usage.len()
+            ));
             if let Some(max_ts) = usage.iter().map(|u| u.ts).max() {
                 self.store.set_watermark(agent_id, max_ts);
             }
@@ -270,6 +328,16 @@ impl Aggregator {
                     }
                 }
                 let state = compute_state(&sig, now);
+                // 首见/状态迁移留痕（"岛为什么变红/变琥珀"的时间线钥匙——
+                // 状态机迁移是用户最直接感知的行为，埋点审查 2026-09-17 二次补强）
+                match self.last_states.get(&info.id) {
+                    None => log::debug!("[{agent_id}] 会话首见：{}（{state:?}）", info.id),
+                    Some(prev) if *prev != state => {
+                        log::debug!("[{agent_id}] 会话 {} 状态迁移：{prev:?} → {state:?}", info.id)
+                    }
+                    _ => {}
+                }
+                self.last_states.insert(info.id.clone(), state);
                 // 会话元数据与状态入库（收缩态查询走内存快照，库做持久层）
                 self.store.upsert_session(
                     &info.id, agent_id,
@@ -314,22 +382,55 @@ impl Aggregator {
         let quota_exhausted = quotas
             .iter()
             .any(|q| q.provider == "glm" && q.window_kind == "5h" && q.used_percent >= Some(100.0));
+        // 耗尽标志翻转留痕（前端红光状态的时间线）
+        if quota_exhausted != self.last_quota_exhausted {
+            log::debug!(
+                "[额度] 5h 耗尽标志翻转：{} → {}",
+                self.last_quota_exhausted,
+                quota_exhausted
+            );
+            self.last_quota_exhausted = quota_exhausted;
+        }
 
         let island = aggregate(&views.iter().map(|v| v.state).collect::<Vec<_>>());
         let quota_views = quotas
             .into_iter()
             .map(|q| QuotaView { provider: q.provider, window_kind: q.window_kind, used_percent: q.used_percent, reset_at: q.reset_at })
             .collect();
-        // degraded：连续多轮有采集源失败才置位；恢复即清零
+        // degraded：连续多轮有采集源失败才置位；恢复即清零。
+        // 进入/恢复各留痕一次（不再 degraded 期间每轮重复刷 warn），
+        // 进入时带上最近错误根因（2026-09-17 埋点审查）
         if had_error {
             self.fail_streak += 1;
+            self.last_error = last_err;
         } else {
+            if self.fail_streak >= DEGRADE_AFTER_TICKS {
+                log::info!("采集已恢复正常，degraded 解除（此前连续失败 {} 轮）", self.fail_streak);
+            }
             self.fail_streak = 0;
+            self.last_error = None;
         }
         let degraded = self.fail_streak >= DEGRADE_AFTER_TICKS;
-        if degraded {
-            log::warn!("采集源连续 {} 轮失败，快照标记 degraded", self.fail_streak);
+        if self.fail_streak == DEGRADE_AFTER_TICKS {
+            log::warn!(
+                "采集连续 {} 轮失败，快照标记 degraded（最近错误：{}）",
+                self.fail_streak,
+                self.last_error.as_deref().unwrap_or("未知")
+            );
         }
+        // tick 摘要（开发者模式排障主线索：每轮一条，产出/耗时/降级状态一览；
+        // 正常态约 1MB/天内，按天滚动设计完全接得住）
+        log::debug!(
+            "[聚合] tick 耗时 {}ms：{}；hook 事件 {} 条；degraded={}",
+            t0.elapsed().as_millis(),
+            if collect_stats.is_empty() {
+                "无启用的适配器".to_string()
+            } else {
+                collect_stats.join("；")
+            },
+            hook_events_consumed,
+            degraded
+        );
         IslandSnapshot {
             sessions: views,
             island,

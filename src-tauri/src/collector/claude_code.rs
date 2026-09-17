@@ -201,8 +201,11 @@ impl AgentAdapter for ClaudeCodeAdapter {
                 last_usage_at: Some(mtime),
             });
         }
-        // 最近修改在前，截断 100
+        // 最近修改在前，截断 100（超出截断留痕：多项目用户"少了会话"的排障线索）
         out.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
+        if out.len() > 100 {
+            log::debug!("[claude-code] 会话 {} 个，截断保留最近 100", out.len());
+        }
         out.truncate(100);
         Ok(out)
     }
@@ -214,16 +217,25 @@ impl AgentAdapter for ClaudeCodeAdapter {
     /// 自库幂等键，不会重复入库；按 message.id 去重（同 id 保留用量最大行）
     fn collect_usage(&self, watermark_ts: i64) -> anyhow::Result<Vec<UsageRow>> {
         let mut dedup: std::collections::HashMap<String, UsageRow> = std::collections::HashMap::new();
+        // 异常统计（2026-09-17 埋点审查）：本轮结束若有异常汇总一条 debug；
+        // 正常轮零输出零噪音，持续出现即"采集源异常"的排障线索
+        let (mut err_open, mut err_read, mut bad_lines) = (0usize, 0usize, 0usize);
         for f in self.transcript_files() {
             let mtime = Self::mtime_ms(&f);
             if mtime <= watermark_ts {
                 continue; // 文件未变，必无新行
             }
             // 打开文件拿当前长度：用于识别"重建后比旧偏移小"的场景（归零重读）
-            let Ok(mut file) = std::fs::File::open(&f) else { continue };
+            let Ok(mut file) = std::fs::File::open(&f) else {
+                err_open += 1;
+                continue;
+            };
             let total = match file.metadata() {
                 Ok(m) => m.len(),
-                Err(_) => continue,
+                Err(_) => {
+                    err_open += 1;
+                    continue;
+                }
             };
             let start = {
                 let map = self.lock_offsets();
@@ -236,9 +248,11 @@ impl AgentAdapter for ClaudeCodeAdapter {
             let text = {
                 let mut buf = Vec::new();
                 if start > 0 && file.seek(SeekFrom::Start(start)).is_err() {
+                    err_read += 1;
                     continue;
                 }
                 if file.read_to_end(&mut buf).is_err() {
+                    err_read += 1;
                     continue; // 文件被占用：跳过本轮，下次再试
                 }
                 String::from_utf8_lossy(&buf).into_owned()
@@ -261,6 +275,7 @@ impl AgentAdapter for ClaudeCodeAdapter {
             };
             for line in body.lines() {
                 let Ok(j) = serde_json::from_str::<TranscriptLine>(line) else {
+                    bad_lines += 1;
                     continue; // 容忍坏行（红线：解析失败不阻塞）
                 };
                 if j.kind != "assistant" {
@@ -315,6 +330,13 @@ impl AgentAdapter for ClaudeCodeAdapter {
                     })
                     .or_insert(row);
             }
+        }
+        // 本轮异常汇总：坏行持续出现 = Claude Code 升级改了 JSONL 格式或文件损坏，
+        // 若无此留痕，用量会"静默归零"（2026-09-17 埋点审查补的最大盲点）
+        if err_open + err_read + bad_lines > 0 {
+            log::debug!(
+                "[claude-code] 采集异常统计：打开失败 {err_open}，读失败 {err_read}，坏行 {bad_lines}"
+            );
         }
         let mut rows: Vec<UsageRow> = dedup.into_values().collect();
         rows.sort_by_key(|r| r.ts);

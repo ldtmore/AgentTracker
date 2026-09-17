@@ -55,6 +55,7 @@ pub fn find_session_window(agent: &str, project_dir: Option<&str>) -> Option<isi
                 .iter()
                 .find(|(_, t, _)| t.to_ascii_lowercase().contains(&target))
             {
+                log::debug!("[跳转] 策略①标题含完整路径命中：hwnd={h}");
                 return Some(*h);
             }
         }
@@ -67,6 +68,7 @@ pub fn find_session_window(agent: &str, project_dir: Option<&str>) -> Option<isi
                     .iter()
                     .find(|(_, t, _)| t.to_ascii_lowercase().contains(&name))
                 {
+                    log::debug!("[跳转] 策略②标题含目录名「{name}」命中：hwnd={h}");
                     return Some(*h);
                 }
             }
@@ -77,6 +79,7 @@ pub fn find_session_window(agent: &str, project_dir: Option<&str>) -> Option<isi
     // （Windows Terminal 标签无路径信息，但 pwsh/node 是 WT 子进程，按 PID 反查窗口）
     if agent == "claude-code" {
         if let Some(h) = find_terminal_running_claude(&windows) {
+            log::debug!("[跳转] 策略③进程链命中：hwnd={h}");
             return Some(h);
         }
     }
@@ -87,12 +90,18 @@ pub fn find_session_window(agent: &str, project_dir: Option<&str>) -> Option<isi
         .iter()
         .find(|(_, t, _)| t.to_ascii_lowercase().contains(keyword))
         .map(|(h, _, _)| *h);
-    if hit.is_none() {
-        // 跳转未命中诊断（T10 调试线索，R14）：dev 控制台可见；release 无控制台自然静默
-        eprintln!("[focus] 未命中 agent={agent} project_dir={project_dir:?}，当前可见窗口：");
+    if let Some(h) = hit {
+        log::debug!("[跳转] 策略④关键词「{keyword}」命中：hwnd={h}");
+    } else {
+        // 跳转未命中诊断（T10）：走文件日志（2026-09-17 埋点审查：
+        // 原 eprintln 在 release 无控制台等于丢失，用户报"跳不过去"时零线索）
+        log::debug!(
+            "[跳转] 全部策略未命中：agent={agent} project_dir={project_dir:?}，可见窗口 {} 个：",
+            windows.len()
+        );
         for (h, t, pid) in windows.iter().take(40) {
             let title: String = t.chars().take(60).collect();
-            eprintln!("[focus]   hwnd={h} pid={pid} title={title}");
+            log::debug!("[跳转]   hwnd={h} pid={pid} title={title}");
         }
     }
     hit
@@ -141,10 +150,10 @@ fn find_terminal_running_claude(windows: &[(isize, String, u32)]) -> Option<isiz
         }
     }
     if wanted_pids.is_empty() {
-        eprintln!("[focus] 进程链未找到在跑 claude 的终端进程（T10 调试，R14）");
+        log::debug!("[跳转] 进程链未找到在跑 claude 的终端进程");
         return None;
     }
-    eprintln!("[focus] 在跑 claude 的候选进程 PID：{:?}", wanted_pids);
+    log::debug!("[跳转] 进程链候选 PID：{:?}", wanted_pids);
     // 窗口按 PID 命中（优先标题最长的，避免 "Default" 之类空壳）
     let mut hits: Vec<&(isize, String, u32)> = windows
         .iter()

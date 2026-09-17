@@ -50,8 +50,14 @@ pub fn read_events(path: &Path, offset: u64) -> anyhow::Result<(Vec<HookEvent>, 
         Ok(m) => m.len(),
         Err(e) => return Err(anyhow::anyhow!("读取事件文件元数据失败：{e}")),
     };
-    // 文件比偏移还小 = 被重建/轮转：偏移归零，当轮立即重读（bug 修复，审查 1.2）
-    let offset = if total < offset { 0 } else { offset };
+    // 文件比偏移还小 = 被重建/轮转：偏移归零，当轮立即重读（bug 修复，审查 1.2；
+    // 该状态迁移是"事件消费失明"bug 的现场，debug 留痕——埋点审查 2026-09-17）
+    let offset = if total < offset {
+        log::debug!("[hooks] 事件文件被重建/轮转（长度 {total} < 偏移 {offset}），归零重读");
+        0
+    } else {
+        offset
+    };
     if total == offset {
         return Ok((events, offset)); // 无新增
     }
@@ -61,6 +67,7 @@ pub fn read_events(path: &Path, offset: u64) -> anyhow::Result<(Vec<HookEvent>, 
         f.seek(SeekFrom::Start(offset - 1))?;
         let mut prev = [0u8; 1];
         if f.read_exact(&mut prev).is_err() {
+            log::debug!("[hooks] 偏移前一字节读取失败（本轮跳过）");
             return Ok((events, offset));
         }
         if prev[0] != b'\n' {
@@ -75,16 +82,19 @@ pub fn read_events(path: &Path, offset: u64) -> anyhow::Result<(Vec<HookEvent>, 
         }
     }
     if f.seek(SeekFrom::Start(start)).is_err() {
+        log::debug!("[hooks] 事件文件 seek 失败（本轮跳过）");
         return Ok((events, offset));
     }
     let mut buf = Vec::new();
     if f.read_to_end(&mut buf).is_err() {
+        log::debug!("[hooks] 事件文件读取失败（文件被占用？本轮跳过）");
         return Ok((events, offset)); // 读失败（占用等）：本轮跳过
     }
     // 逐完整行解析（按字节切行，偏移推进与文件字节严格对应；
     // 单行内 UTF-8 损坏只影响该行，不影响偏移）
     let mut new_offset = start;
     let mut consumed = 0usize;
+    let mut bad_lines = 0usize;
     for line in buf.split_inclusive(|b| *b == b'\n') {
         if !line.ends_with(b"\n") {
             break; // 末尾半行：留给下一轮
@@ -98,7 +108,14 @@ pub fn read_events(path: &Path, offset: u64) -> anyhow::Result<(Vec<HookEvent>, 
         }
         if let Ok(ev) = serde_json::from_str::<HookEvent>(trimmed) {
             events.push(ev);
-        } // 坏行静默忽略
+        } else {
+            bad_lines += 1;
+        } // 坏行跳过不阻塞，计数留痕
+    }
+    // 坏行留痕：正常为零；持续出现 = hook-bridge 协议变更或文件损坏
+    // （若无此留痕，事件会"静默全丢"——埋点审查 2026-09-17）
+    if bad_lines > 0 {
+        log::debug!("[hooks] 本轮 {bad_lines} 行解析失败已跳过");
     }
     Ok((events, new_offset))
 }
