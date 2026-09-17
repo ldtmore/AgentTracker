@@ -64,39 +64,70 @@ function IslandApp() {
   // 移出后滑出隐藏的宽限定时器（400ms 内回来则取消，防误触）
   const leaveTimer = useRef<number | undefined>(undefined);
 
-  // 启动时读取岛尺寸/提醒阈值/悬停展开开关/贴边状态（读取失败用默认值）
+  // 启动引导：读取岛尺寸/提醒阈值/悬停展开开关/贴边状态。
+  // 初始贴边状态必须主动拉取：启动恢复在 setup 阶段已把窗口滑出隐藏，
+  // 早于本窗口事件监听建立，island-dock 事件收不到；不拉取会把隐藏态渲染成完整胶囊。
+  // 窗口极早期加载（暖缓存下亚秒级完成）时，挂载瞬间的 invoke 会被无声丢弃且
+  // promise 永不落定（2026-09-17 实测），故每 1s 重试直至三项各成功一次；
+  // 成功后停表，之后贴边状态改由 island-dock 事件流维护
   useEffect(() => {
-    invoke<IslandMetrics>("island_metrics").then(setMetrics).catch(() => {});
-    // 初始贴边状态必须主动拉取：启动恢复在 setup 阶段已把窗口滑出隐藏，
-    // 早于本窗口事件监听建立，island-dock 事件收不到；不拉取会把隐藏态渲染成完整胶囊
-    invoke<{ edge: string; hidden: boolean }>("island_dock_state")
-      .then((d) => {
-        dockRef.current = d;
-        setDock(d);
-      })
-      .catch(() => {});
-    invoke<Record<string, string>>("get_settings")
-      .then((s) => {
-        setThresholds(sanitizeThresholds(s.threshold_warn, s.threshold_danger));
-        if (s.hover_expand !== undefined) setHoverCard(s.hover_expand !== "0");
-        if (s.agents_enabled) {
-          try {
-            const list = JSON.parse(s.agents_enabled) as string[];
-            if (Array.isArray(list)) setAgents(list); // 空数组 = 用户选择全部不监控，尊重之
-          } catch {
-            /* 解析失败用默认全选 */
-          }
+    const done = { metrics: false, dock: false, settings: false };
+    const bootstrap = async () => {
+      if (!done.metrics) {
+        try {
+          const m = await invoke<IslandMetrics>("island_metrics");
+          if (m) setMetrics(m); // 取不到显示器时后端返回 null，保持默认尺寸即可
+          done.metrics = true;
+        } catch {
+          /* 通道未就绪，下轮重试 */
         }
-        if (s.agent_colors) {
-          try {
-            const colors = JSON.parse(s.agent_colors) as Record<string, string>;
-            if (colors && typeof colors === "object") setAgentColors(colors);
-          } catch {
-            /* 解析失败用默认色 */
-          }
+      }
+      if (!done.dock) {
+        try {
+          const d = await invoke<{ edge: string; hidden: boolean }>("island_dock_state");
+          dockRef.current = d;
+          setDock(d);
+          done.dock = true;
+        } catch {
+          /* 通道未就绪，下轮重试 */
         }
-      })
-      .catch(() => {});
+      }
+      if (!done.settings) {
+        try {
+          const s = await invoke<Record<string, string>>("get_settings");
+          setThresholds(sanitizeThresholds(s.threshold_warn, s.threshold_danger));
+          if (s.hover_expand !== undefined) setHoverCard(s.hover_expand !== "0");
+          if (s.agents_enabled) {
+            try {
+              const list = JSON.parse(s.agents_enabled) as string[];
+              if (Array.isArray(list)) setAgents(list); // 空数组 = 用户选择全部不监控，尊重之
+            } catch {
+              /* 解析失败用默认全选 */
+            }
+          }
+          if (s.agent_colors) {
+            try {
+              const colors = JSON.parse(s.agent_colors) as Record<string, string>;
+              if (colors && typeof colors === "object") setAgentColors(colors);
+            } catch {
+              /* 解析失败用默认色 */
+            }
+          }
+          done.settings = true;
+        } catch {
+          /* 通道未就绪，下轮重试 */
+        }
+      }
+    };
+    void bootstrap();
+    const timer = window.setInterval(() => {
+      if (done.metrics && done.dock && done.settings) {
+        window.clearInterval(timer);
+        return;
+      }
+      void bootstrap();
+    }, 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   // 设置页修改悬停展开开关后实时推送
