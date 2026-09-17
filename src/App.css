@@ -1,52 +1,52 @@
-/* AgentTrackerIsland 灵动岛样式(02-DESIGN §5);M1-4 起色板变量化,支持深浅双主题 */
+/* AgentTrackerIsland 灵动岛样式（02-DESIGN §5）；M1-4 起色板变量化，支持深浅双主题 */
 
 /* ===== 主题色板 =====
-   暗色为默认(:root,初始无 data-theme 时与历史版本视觉一致,避免闪变);
-   浅色经 [data-theme="light"] 覆盖,由 theme.ts 把解析结果写到 <html> 的 data-theme */
+   暗色为默认（：root，初始无 data-theme 时与历史版本视觉一致，避免闪变）；
+   浅色经 [data-theme="light"] 覆盖，由 theme.ts 把解析结果写到 <html> 的 data-theme */
 :root {
-  /* 文本四级:主 / 次 / 弱 / 最弱 */
+  /* 文本四级：主 / 次 / 弱 / 最弱 */
   --text-1: #e8eaf0;
   --text-2: #d1d5db;
   --text-3: #9ca3af;
   --text-4: #6b7280;
-  /* 岛收缩态胶囊 / 展开面板 / 贴边隐藏态标签的半透明面层(窗口本身全透明) */
+  /* 岛收缩态胶囊 / 展开面板 / 贴边隐藏态标签的半透明面层（窗口本身全透明） */
   --pill-bg: rgba(20, 20, 24, 0.72);
   --panel-bg: rgba(20, 20, 24, 0.88);
   --edge-tab-bg: rgba(15, 17, 22, 0.92);
-  /* 贴边标签:分段缝隙描边色(与标签底色同源,视觉上即"缝")、内发光 */
+  /* 贴边标签：分段缝隙描边色（与标签底色同源，视觉上即"缝"）、内发光 */
   --edge-wedge-stroke: rgba(15, 17, 22, 0.9);
   --edge-shadow: rgba(0, 0, 0, 0.35);
-  /* 常规窗口(设置/报表)不透明根背景 */
+  /* 常规窗口（设置/报表）不透明根背景 */
   --root-bg: #141418;
   /* 区块/卡片底色与悬停态 */
   --surface: rgba(255, 255, 255, 0.04);
   --surface-hover: rgba(255, 255, 255, 0.09);
-  /* 通用弱边框(卡片/面板)与强边框(输入框/按钮/色块) */
+  /* 通用弱边框（卡片/面板）与强边框（输入框/按钮/色块） */
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.14);
   /* 输入框底与边 */
   --input-bg: rgba(255, 255, 255, 0.06);
   --input-border: rgba(255, 255, 255, 0.12);
-  /* 进度/额度轨道底(面板进度条、贴边额度发丝线共用) */
+  /* 进度/额度轨道底（面板进度条、贴边额度发丝线共用） */
   --track: rgba(255, 255, 255, 0.08);
-  /* 左右贴边额度弧线的轨道描边(SVG) */
+  /* 左右贴边额度弧线的轨道描边（SVG） */
   --arc-track: rgba(255, 255, 255, 0.14);
   /* 滚动条 */
   --scroll-thumb: rgba(255, 255, 255, 0.15);
   --scroll-thumb-hover: rgba(255, 255, 255, 0.28);
-  /* 常规按钮(设置/报表页)常态与悬停底色 */
+  /* 常规按钮（设置/报表页）常态与悬停底色 */
   --btn-bg: rgba(255, 255, 255, 0.08);
   --btn-bg-hover: rgba(255, 255, 255, 0.14);
-  /* select 弹出 option 背景(原生控件不吃半透明变量) */
+  /* select 弹出 option 背景（原生控件不吃半透明变量） */
   --option-bg: #1f1f26;
-  /* 语义色:强调翠绿(开关/勾选/徽标/输入聚焦)与错误红;浅色主题换深色版本保证白底对比度 */
+  /* 语义色：强调翠绿（开关/勾选/徽标/输入聚焦）与错误红；浅色主题换深色版本保证白底对比度 */
   --accent: #34d399;
   --danger: #f87171;
-  /* 开关关闭态轨道(比输入框底更实,避免看起来像没画) */
+  /* 开关关闭态轨道（比输入框底更实，避免看起来像没画） */
   --switch-off: rgba(255, 255, 255, 0.22);
 }
 
-/* 浅色色板:半透明面层改白系,边框/悬停改黑系低透明度;状态色(绿/琥珀/红)双主题通用 */
+/* 浅色色板：半透明面层改白系，边框/悬停改黑系低透明度；状态色（绿/琥珀/红）双主题通用 */
 [data-theme="light"] {
   --text-1: #1f2328;
   --text-2: #424a53;
@@ -76,7 +76,7 @@
   --switch-off: rgba(0, 0, 0, 0.2);
 }
 
-/* 透明窗口:html/body 必须透明,形态由内部元素呈现 */
+/* 透明窗口：html/body 必须透明，形态由内部元素呈现 */
 html,
 body,
 #root {
@@ -117,12 +117,12 @@ body,
   pointer-events: none; /* 保证整条可拖拽 */
 }
 
-/* 点击展开模式:胶囊可点击切换卡片 */
+/* 点击展开模式：胶囊可点击切换卡片 */
 .island-clickable {
   cursor: pointer;
 }
 
-/* 状态灯(语义色,双主题通用) */
+/* 状态灯（语义色，双主题通用） */
 .dot {
   width: 10px;
   height: 10px;
@@ -149,7 +149,7 @@ body,
   background: #6b7280;
 }
 
-/* 工作中:呼吸动画 */
+/* 工作中：呼吸动画 */
 @keyframes breathe {
   0%,
   100% {
@@ -166,7 +166,7 @@ body,
   animation: breathe 2s ease-in-out infinite;
 }
 
-/* 出错:急促脉冲 */
+/* 出错：急促脉冲 */
 @keyframes pulse {
   0%,
   100% {
@@ -243,7 +243,7 @@ body,
   color: var(--text-4);
 }
 
-/* 会话列表(滚动区) */
+/* 会话列表（滚动区） */
 .panel-sessions {
   flex: 1;
   min-height: 0;
@@ -289,7 +289,7 @@ body,
   height: 8px;
 }
 
-/* 徽标:灰底深字的角色不变,底色属"中性灰"双主题同值(文字恒深色保证可读) */
+/* 徽标：灰底深字的角色不变，底色属"中性灰"双主题同值（文字恒深色保证可读） */
 .card-badge {
   flex: none;
   font-size: 10px;
@@ -406,7 +406,7 @@ body,
   font-variant-numeric: tabular-nums;
 }
 
-/* ===== 贴边隐藏态标签(M1-6):独立微 UI,不是胶囊的截取 ===== */
+/* ===== 贴边隐藏态标签（M1-6）：独立微 UI，不是胶囊的截取 ===== */
 
 .edge-tab {
   position: absolute;
@@ -416,36 +416,36 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden; /* 分段条被容器圆角裁切,首尾段贴合隐藏态边缘 */
-  /* 用内发光代替外阴影:外阴影伸出窗口矩形的部分会被裁平,
+  overflow: hidden; /* 分段条被容器圆角裁切，首尾段贴合隐藏态边缘 */
+  /* 用内发光代替外阴影：外阴影伸出窗口矩形的部分会被裁平，
      在圆角外沿形成"发虚的直角" */
   box-shadow: inset 0 0 8px var(--edge-shadow);
   cursor: pointer;
   transition: filter 0.15s ease, border-color 0.15s ease;
 }
 
-/* 悬停提亮(标签本身的微交互反馈) */
+/* 悬停提亮（标签本身的微交互反馈） */
 .edge-tab:hover {
   filter: brightness(1.35);
 }
 
-/* 浅色下白色标签提亮被钳制(白→白无反馈),改为轻微压暗,与深色提亮对称 */
+/* 浅色下白色标签提亮被钳制（白→白无反馈），改为轻微压暗，与深色提亮对称 */
 [data-theme="light"] .edge-tab:hover {
   filter: brightness(0.92);
 }
 
 .edge-tab * {
-  pointer-events: auto; /* 分段条带 tooltip;拖拽经各段自身的 drag-region 属性 */
+  pointer-events: auto; /* 分段条带 tooltip；拖拽经各段自身的 drag-region 属性 */
 }
 
-/* 出错:描边 + 内圈红光,不悬停也能感知 */
+/* 出错：描边 + 内圈红光，不悬停也能感知 */
 .edge-tab.edge-error {
   border-color: rgba(248, 113, 113, 0.6);
   box-shadow: inset 0 0 8px rgba(248, 113, 113, 0.35);
 }
 
-/* 顶部贴边:胶囊底部约 1/5 的短条(高与 Rust PEEK_TOP_H 对应,占满窗口宽);
-   分段横切,段间 1px 深缝分隔 */
+/* 顶部贴边：胶囊底部约 1/5 的短条（高与 Rust PEEK_TOP_H 对应，占满窗口宽）；
+   分段横切，段间 1px 深缝分隔 */
 .edge-tab-top {
   left: 0;
   right: 0;
@@ -456,8 +456,8 @@ body,
   gap: 1px;
 }
 
-/* 左贴边:半椭圆 D 形,窗口右缘伸入屏幕(与 Rust PEEK_SIDE_W 对应)。
-   100%/50% 圆角 = 左缘纯半椭圆(无直边),与扇形切分、额度弧线的几何一致 */
+/* 左贴边：半椭圆 D 形，窗口右缘伸入屏幕（与 Rust PEEK_SIDE_W 对应）。
+   100%/50% 圆角 = 左缘纯半椭圆（无直边），与扇形切分、额度弧线的几何一致 */
 .edge-tab-left {
   right: 0;
   top: 0;
@@ -469,7 +469,7 @@ body,
   gap: 1px;
 }
 
-/* 右贴边:镜像 */
+/* 右贴边：镜像 */
 .edge-tab-right {
   left: 0;
   top: 0;
@@ -481,9 +481,9 @@ body,
   gap: 1px;
 }
 
-/* ===== Agent 占比分段:颜色 = 身份(内联注入),状态用亮度/动效表达 ===== */
+/* ===== Agent 占比分段：颜色 = 身份（内联注入），状态用亮度/动效表达 ===== */
 
-/* 顶部横条:等宽分段,撑满隐藏态高度 */
+/* 顶部横条：等宽分段，撑满隐藏态高度 */
 .edge-seg {
   flex: 1 1 0;
   min-width: 18px;
@@ -492,23 +492,23 @@ body,
   transition: opacity 0.3s ease;
 }
 
-/* 工作中:全亮 + 慢呼吸(4s/起伏 15%,保留"活着"暗示且不抢注意力) */
+/* 工作中：全亮 + 慢呼吸（4s/起伏 15%，保留"活着"暗示且不抢注意力） */
 .edge-seg.st-working {
   animation: seg-breathe 4s ease-in-out infinite;
 }
 
-/* 等待输入:快闪(需要你注意,但仍不刺眼) */
+/* 等待输入：快闪（需要你注意，但仍不刺眼） */
 .edge-seg.st-waiting {
   animation: seg-blink 1.2s ease-in-out infinite;
 }
 
-/* 出错:红圈描边 + 快闪(身份色保留在圈内) */
+/* 出错：红圈描边 + 快闪（身份色保留在圈内） */
 .edge-seg.st-error {
   box-shadow: inset 0 0 0 1.5px #f87171;
   animation: seg-blink 0.9s ease-in-out infinite;
 }
 
-/* 空闲:45% 暗淡;离线:近隐没 */
+/* 空闲：45% 暗淡；离线：近隐没 */
 .edge-seg.st-idle {
   opacity: 0.45;
 }
@@ -517,7 +517,7 @@ body,
   opacity: 0.18;
 }
 
-/* 呼吸(慢,4s):表达"工作中" */
+/* 呼吸（慢，4s）：表达"工作中" */
 @keyframes seg-breathe {
   0%,
   100% {
@@ -528,7 +528,7 @@ body,
   }
 }
 
-/* 快闪(1.2s):表达"等待输入" */
+/* 快闪（1.2s）：表达"等待输入" */
 @keyframes seg-blink {
   0%,
   100% {
@@ -539,7 +539,7 @@ body,
   }
 }
 
-/* 额度发丝进度线:贴顶条底边,长度 = 5h 已用百分比 */
+/* 额度发丝进度线：贴顶条底边，长度 = 5h 已用百分比 */
 .edge-quota-track {
   position: absolute;
   left: 0;
@@ -554,11 +554,11 @@ body,
   border-radius: 0 1px 1px 0;
 }
 
-/* 左右贴边:SVG 扇形楔形(从圆心辐射等角切分;区域小不放文字,悬停有提示)。
-   与顶部同一套状态语言:亮度/动效表达状态,颜色只表身份。
-   独立类名:HTML 条的盒模型样式不可作用到 SVG 元素(否则 Chromium 不渲染) */
+/* 左右贴边：SVG 扇形楔形（从圆心辐射等角切分；区域小不放文字，悬停有提示）。
+   与顶部同一套状态语言：亮度/动效表达状态，颜色只表身份。
+   独立类名：HTML 条的盒模型样式不可作用到 SVG 元素（否则 Chromium 不渲染） */
 .edge-tab .edge-svg {
-  pointer-events: none; /* SVG 根不拦截事件,悬停/拖拽落到楔形上 */
+  pointer-events: none; /* SVG 根不拦截事件，悬停/拖拽落到楔形上 */
 }
 
 .edge-wedge {
@@ -575,7 +575,7 @@ body,
   animation: seg-blink 1.2s ease-in-out infinite;
 }
 
-/* 出错:SVG 不支持 box-shadow,用红描边圈表达 */
+/* 出错：SVG 不支持 box-shadow，用红描边圈表达 */
 .edge-wedge.st-error {
   stroke: #f87171;
   stroke-width: 2;
@@ -590,8 +590,8 @@ body,
   opacity: 0.18;
 }
 
-/* 左右贴边:额度进度沿半圆外沿的弧线绘制(SVG 描边,弧长 ∝ 已用百分比)。
-   弧线与容器轮廓同曲线,描边 3px 的一半被裁切,可见约 1.5px 贴边 */
+/* 左右贴边：额度进度沿半圆外沿的弧线绘制（SVG 描边，弧长 ∝ 已用百分比）。
+   弧线与容器轮廓同曲线，描边 3px 的一半被裁切，可见约 1.5px 贴边 */
 .edge-arc {
   fill: none;
   stroke-width: 3;

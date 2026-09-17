@@ -1,6 +1,6 @@
-/* 设置页样式(2026-09-17 重构):分区卡片 + 统一"设置行" + 即时生效交互
-   色板全部走 App.css 主题变量(含本次新增的 accent/danger/switch-off),
-   深浅双主题下均保证文字与控件的对比度;窗口可调尺寸,布局随宽度流式伸缩 */
+/* 设置页样式（2026-09-17 重构）：分区卡片 + 统一"设置行" + 即时生效交互
+   色板全部走 App.css 主题变量（含本次新增的 accent/danger/switch-off），
+   深浅双主题下均保证文字与控件的对比度；窗口可调尺寸，布局随宽度流式伸缩 */
 
 .st-root {
   box-sizing: border-box;
@@ -16,8 +16,8 @@
   gap: 12px;
 }
 
-/* 滚动条:与灵动岛展开面板(panel-sessions)同款——6px 细条半透明,
-   悬停加亮;轨道透明融入窗口背景 */
+/* 滚动条：与灵动岛展开面板（panel-sessions）同款——6px 细条半透明，
+   悬停加亮；轨道透明融入窗口背景 */
 .st-root::-webkit-scrollbar {
   width: 6px;
 }
@@ -47,10 +47,10 @@
   flex: none;
 }
 
-/* ===== 分区头:主标题 + 副标题同行(主/副标题关系,基线对齐,均不换行) ===== */
+/* ===== 分区头：主标题 + 副标题同行（主/副标题关系，基线对齐，均不换行） ===== */
 
-/* 副标题不换行:窗口最小宽度按最宽一条副标题的实际文字宽度设下限,
-   极端收窄时以省略号兜底(正常最小宽度下不会触发) */
+/* 副标题不换行：窗口最小宽度按最宽一条副标题的实际文字宽度设下限，
+   极端收窄时以省略号兜底（正常最小宽度下不会触发） */
 .st-sec-head {
   display: flex;
   align-items: baseline;
@@ -80,7 +80,7 @@
   margin-top: 4px;
 }
 
-/* ===== 设置行:左 = 固定标题 + 固定描述,右 = 控件;相邻行发丝线分隔 ===== */
+/* ===== 设置行：左 = 固定标题 + 固定描述，右 = 控件；相邻行发丝线分隔 ===== */
 
 .st-row-item {
   padding: 10px 0;
@@ -117,7 +117,7 @@
   margin-top: 2px;
 }
 
-/* 校验错误:就近显示在出错行正下方(不用底部/远端提示,保证可见) */
+/* 校验错误：就近显示在出错行正下方（不用底部/远端提示，保证可见） */
 .st-row-error {
   font-size: 11px;
   color: var(--danger);
@@ -131,7 +131,7 @@
   flex: none;
 }
 
-/* tall 行:宽控件(输入框)独占一行放到文字下方 */
+/* tall 行：宽控件（输入框）独占一行放到文字下方 */
 .st-row-control-tall {
   margin-top: 8px;
 }
@@ -158,19 +158,19 @@ select.st-input option {
   background: var(--option-bg);
 }
 
-/* 行右侧定宽下拉(平台 / 保留周期) */
+/* 行右侧定宽下拉（平台 / 保留周期） */
 .st-input-sm {
   width: 172px;
 }
 
-/* 阈值数字输入:居中窄框 */
+/* 阈值数字输入：居中窄框 */
 .st-input-num {
   width: 56px;
   text-align: center;
   padding: 6px 4px;
 }
 
-/* 阈值前置色点:琥珀 / 红,与岛胶囊语义一致 */
+/* 阈值前置色点：琥珀 / 红，与岛胶囊语义一致 */
 .st-th {
   display: inline-flex;
   align-items: center;
@@ -192,7 +192,7 @@ select.st-input option {
   background: #ef4444;
 }
 
-/* API Key 输入 + 明文切换(flex:1:作为控件行的 flex 子项占满剩余宽度) */
+/* API Key 输入 + 明文切换（flex：1：作为控件行的 flex 子项占满剩余宽度） */
 .st-token {
   display: flex;
   gap: 6px;
@@ -222,7 +222,7 @@ select.st-input option {
   color: var(--text-1);
 }
 
-/* ===== 滑动开关:状态由位置表达,标题文案固定 ===== */
+/* ===== 滑动开关：状态由位置表达，标题文案固定 ===== */
 
 .st-switch {
   position: relative;
@@ -262,7 +262,7 @@ select.st-input option {
   transform: translateX(16px);
 }
 
-/* ===== 三档分段选择(主题):点击即全窗口预览 ===== */
+/* ===== 三档分段选择（主题）：点击即全窗口预览 ===== */
 
 .st-seg {
   display: inline-flex;
@@ -295,7 +295,7 @@ select.st-input option {
   font-weight: 500;
 }
 
-/* ===== 状态徽标:已启用(强调色)/未启用(灰),随主题换色 ===== */
+/* ===== 状态徽标：已启用（强调色）/未启用（灰），随主题换色 ===== */
 
 .st-badge {
   display: inline-flex;
@@ -356,7 +356,7 @@ select.st-input option {
   color: var(--text-2);
 }
 
-/* ===== Agent 监控:勾选行 + 颜色选择器 ===== */
+/* ===== Agent 监控：勾选行 + 颜色选择器 ===== */
 
 .st-agents {
   display: flex;
@@ -400,7 +400,7 @@ select.st-input option {
   cursor: pointer;
 }
 
-/* 未勾选的 Agent 不采集不展示,颜色一并置灰禁用 */
+/* 未勾选的 Agent 不采集不展示，颜色一并置灰禁用 */
 .st-agent-color:disabled {
   opacity: 0.35;
   cursor: not-allowed;
@@ -412,7 +412,7 @@ select.st-input option {
   justify-content: flex-end;
 }
 
-/* ===== 顶部 toast:非模态操作结果;成功 2.5s 自动消失,失败常驻 ===== */
+/* ===== 顶部 toast：非模态操作结果；成功 2.5s 自动消失，失败常驻 ===== */
 
 .st-toast {
   position: fixed;

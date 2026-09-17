@@ -1,19 +1,19 @@
-//! 本地存储层:AgentTrackerIsland 自库(SQLite)的打开/迁移/读写封装。
-//! 设计依据 docs/02-DESIGN.md §3;红线③(顺序无关)由幂等键与水位保证。
-//! 线程模型:Connection 非 Sync,用 Mutex 包裹,单写多读经同一锁串行(M0 规模足够)。
-//! 锁策略:中毒后自恢复(审查 1.1)——单次 panic 不应让后续所有调用连锁失败。
+//! 本地存储层：AgentTrackerIsland 自库（SQLite）的打开/迁移/读写封装。
+//! 设计依据 docs/02-DESIGN.md §3；红线③（顺序无关）由幂等键与水位保证。
+//! 线程模型：Connection 非 Sync，用 Mutex 包裹，单写多读经同一锁串行（M0 规模足够）。
+//! 锁策略：中毒后自恢复（审查 1.1）——单次 panic 不应让后续所有调用连锁失败。
 
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-/// 初始化迁移脚本(0001)
+/// 初始化迁移脚本（0001）
 const MIGRATION_0001: &str = include_str!("migrations/0001_init.sql");
-/// 0002:用量表会话索引(会话级批量聚合加速)+ 移除从未使用的 watermarks.last_offset 列
+/// 0002：用量表会话索引（会话级批量聚合加速）+ 移除从未使用的 watermarks.last_offset 列
 const MIGRATION_0002: &str = include_str!("migrations/0002_indexes.sql");
 
-/// 一条 token 用量流水(来自任一 Agent 适配器的增量采集)
+/// 一条 token 用量流水（来自任一 Agent 适配器的增量采集）
 #[derive(Debug, Clone)]
 pub struct UsageRow {
     pub session_id: String,
@@ -31,7 +31,7 @@ pub struct UsageRow {
     pub error_type: Option<String>,
 }
 
-/// 一条额度快照(来自 Provider 适配器)
+/// 一条额度快照（来自 Provider 适配器）
 #[derive(Debug, Clone)]
 pub struct QuotaRow {
     pub provider: String,
@@ -42,13 +42,13 @@ pub struct QuotaRow {
     pub fetched_at: i64,
 }
 
-/// 存储句柄:克隆 Arc 后全局共享
+/// 存储句柄：克隆 Arc 后全局共享
 pub struct Store {
     conn: Mutex<Connection>,
 }
 
 impl Store {
-    /// 打开(或创建)数据库并执行迁移;父目录不存在时自动创建
+    /// 打开（或创建）数据库并执行迁移；父目录不存在时自动创建
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -57,12 +57,12 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         Self::migrate(&conn)?;
-        // SQLite 官方建议周期性执行:优化查询规划器统计(开销极小)
+        // SQLite 官方建议周期性执行：优化查询规划器统计（开销极小）
         let _ = conn.execute_batch("PRAGMA optimize;");
         Ok(Self { conn: Mutex::new(conn) })
     }
 
-    /// 迁移:按 user_version 顺序执行(0001 建库,0002 索引,后续版本递增)
+    /// 迁移：按 user_version 顺序执行（0001 建库，0002 索引，后续版本递增）
     fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         let ver: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if ver < 1 {
@@ -76,13 +76,13 @@ impl Store {
         Ok(())
     }
 
-    /// 取连接:Mutex 中毒后直接恢复内容继续用(Connection 内容在事务边界始终一致,
-    /// 单次 panic 不应放大为全应用连锁失败——审查 1.1)
+    /// 取连接：Mutex 中毒后直接恢复内容继续用（Connection 内容在事务边界始终一致，
+    /// 单次 panic 不应放大为全应用连锁失败——审查 1.1）
     fn lock_conn(&self) -> MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// 读取某 Agent 的采集水位(时间戳,毫秒);无记录返回 0
+    /// 读取某 Agent 的采集水位（时间戳，毫秒）；无记录返回 0
     pub fn get_watermark(&self, agent: &str) -> i64 {
         let conn = self.lock_conn();
         conn.query_row(
@@ -96,7 +96,7 @@ impl Store {
         .unwrap_or(0)
     }
 
-    /// 更新采集水位(仅前进,不回退)
+    /// 更新采集水位（仅前进，不回退）
     pub fn set_watermark(&self, agent: &str, ts: i64) {
         let conn = self.lock_conn();
         let _ = conn.execute(
@@ -106,7 +106,7 @@ impl Store {
         );
     }
 
-    /// upsert 会话元数据(首见时间不覆盖,最新状态全量刷新)
+    /// upsert 会话元数据（首见时间不覆盖，最新状态全量刷新）
     #[allow(clippy::too_many_arguments)]
     pub fn upsert_session(
         &self,
@@ -137,17 +137,17 @@ impl Store {
         );
     }
 
-    /// 幂等插入用量流水:同幂等键(agent+session+ts+model)冲突时,仅当新行四项
-    /// 用量合计更大才整行覆盖——与 Claude Code"同消息保留最大快照"口径一致,
-    /// 跨 tick 重采到更完整的流式快照时能原地升级而非被 INSERT OR IGNORE 顶掉;
-    /// 返回实际变更行数(新插入或覆盖)。
-    /// 事务/写失败不再 panic(审查 1.1):记日志返回 0,等下一轮重采
+    /// 幂等插入用量流水：同幂等键（agent+session+ts+model）冲突时，仅当新行四项
+    /// 用量合计更大才整行覆盖——与 Claude Code"同消息保留最大快照"口径一致，
+    /// 跨 tick 重采到更完整的流式快照时能原地升级而非被 INSERT OR IGNORE 顶掉；
+    /// 返回实际变更行数（新插入或覆盖）。
+    /// 事务/写失败不再 panic（审查 1.1）：记日志返回 0，等下一轮重采
     pub fn insert_usage(&self, rows: &[UsageRow]) -> usize {
         let mut conn = self.lock_conn();
         let tx = match conn.transaction() {
             Ok(t) => t,
             Err(e) => {
-                log::warn!("insert_usage 开启事务失败(本轮 {} 行放弃,下轮重采): {e}", rows.len());
+                log::warn!("insert_usage 开启事务失败（本轮 {} 行放弃，下轮重采）：{e}", rows.len());
                 return 0;
             }
         };
@@ -183,11 +183,11 @@ impl Store {
             );
             match n {
                 Ok(v) => changed += v,
-                Err(e) => log::warn!("insert_usage 单行写库失败(ts={} model={}): {e}", r.ts, r.model),
+                Err(e) => log::warn!("insert_usage 单行写库失败（ts={} model={}）：{e}", r.ts, r.model),
             }
         }
         if let Err(e) = tx.commit() {
-            log::warn!("insert_usage 提交事务失败(本轮全部回滚,下轮重采): {e}");
+            log::warn!("insert_usage 提交事务失败（本轮全部回滚，下轮重采）：{e}");
             return 0;
         }
         changed
@@ -203,7 +203,7 @@ impl Store {
         );
     }
 
-    /// 插入原始状态事件(hooks/采集审计)
+    /// 插入原始状态事件（hooks/采集审计）
     pub fn insert_status_event(&self, agent: &str, session_id: Option<&str>, hook: &str, payload: &str, ts: i64) {
         let conn = self.lock_conn();
         let _ = conn.execute(
@@ -230,8 +230,8 @@ impl Store {
         );
     }
 
-    /// 某会话累计 token(input+output,展示口径)。单会话点查,测试与工具用途;
-    /// 聚合 tick 请用 session_usage_totals 批量版(审查 2.2.2 治理 N+1)
+    /// 某会话累计 token（input+output，展示口径）。单会话点查，测试与工具用途；
+    /// 聚合 tick 请用 session_usage_totals 批量版（审查 2.2.2 治理 N+1）
     pub fn session_usage_total(&self, session_id: &str) -> i64 {
         let conn = self.lock_conn();
         conn.query_row(
@@ -243,15 +243,15 @@ impl Store {
         .unwrap_or(0)
     }
 
-    /// 批量:一组会话的累计 token(input+output)。一次 GROUP BY 替代每会话一次
-    /// 点查(旧实现 100 会话 = 每 10s 200 次全表扫描,审查 2.2.2)
+    /// 批量：一组会话的累计 token（input+output）。一次 GROUP BY 替代每会话一次
+    /// 点查（旧实现 100 会话 = 每 10s 200 次全表扫描，审查 2.2.2）
     pub fn session_usage_totals(&self, session_ids: &[String]) -> std::collections::HashMap<String, i64> {
         let mut out = std::collections::HashMap::new();
         if session_ids.is_empty() {
             return out;
         }
         let conn = self.lock_conn();
-        // 占位符仅由内部拼接(元素为自产会话 id),无外部输入
+        // 占位符仅由内部拼接（元素为自产会话 id），无外部输入
         let placeholders = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "SELECT session_id, COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0)
@@ -272,8 +272,8 @@ impl Store {
         out
     }
 
-    /// 批量:每个会话最近一次调用所用模型(Claude Code scan 阶段拿不到 model,
-    /// 展示时兜底回填)。窗口函数取每会话 ts 最大一行,替代逐会话点查(审查 2.2.2)
+    /// 批量：每个会话最近一次调用所用模型（Claude Code scan 阶段拿不到 model，
+    /// 展示时兜底回填）。窗口函数取每会话 ts 最大一行，替代逐会话点查（审查 2.2.2）
     pub fn latest_session_models(&self, session_ids: &[String]) -> std::collections::HashMap<String, String> {
         let mut out = std::collections::HashMap::new();
         if session_ids.is_empty() {
@@ -331,7 +331,7 @@ impl Store {
         }
     }
 
-    /// 查会话元数据(project_dir/agent),跳转窗口用
+    /// 查会话元数据（project_dir/agent），跳转窗口用
     pub fn get_session_meta(&self, id: &str) -> Option<(String, Option<String>)> {
         let conn = self.lock_conn();
         conn.query_row(
@@ -344,7 +344,7 @@ impl Store {
         .flatten()
     }
 
-    /// 读取全部设置(设置页展示)
+    /// 读取全部设置（设置页展示）
     pub fn all_settings(&self) -> std::collections::HashMap<String, String> {
         let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare("SELECT key, value FROM app_settings") else {
@@ -357,7 +357,7 @@ impl Store {
         }
     }
 
-    /// 数据清理:删除 before_ts 之前的用量/快照/事件(设置页滚动周期用)
+    /// 数据清理：删除 before_ts 之前的用量/快照/事件（设置页滚动周期用）
     pub fn cleanup_older_than(&self, before_ts: i64) -> u64 {
         let conn = self.lock_conn();
         let mut total = 0usize;
@@ -372,9 +372,9 @@ impl Store {
     }
 }
 
-// ===== 报表聚合查询(M1-1) =====
+// ===== 报表聚合查询（M1-1） =====
 
-/// 按日聚合用量(日界取本机时区,由 SQLite 'localtime' 修饰符读 OS 时区)
+/// 按日聚合用量（日界取本机时区，由 SQLite 'localtime' 修饰符读 OS 时区）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DayUsage {
     pub day: String, // "2026-09-17"
@@ -384,22 +384,22 @@ pub struct DayUsage {
     pub cache_creation: i64,
 }
 
-/// 按单一维度(模型/供应商)聚合的 token 总量(四项全口径)
+/// 按单一维度（模型/供应商）聚合的 token 总量（四项全口径）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SliceUsage {
     pub label: String,
     pub total: i64,
 }
 
-/// 热力图单元:星期×小时的 token 总量
+/// 热力图单元：星期×小时的 token 总量
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HeatCell {
-    pub weekday: i32, // 0=周日 … 6=周六(SQLite strftime %w)
+    pub weekday: i32, // 0=周日 … 6=周六（SQLite strftime %w）
     pub hour: i32,    // 0–23
     pub total: i64,
 }
 
-/// 报表时间范围起点(days<=0 表示全部历史;否则 days 天前的毫秒时间戳)
+/// 报表时间范围起点（days<=0 表示全部历史；否则 days 天前的毫秒时间戳）
 fn range_cutoff(days: i64) -> i64 {
     if days <= 0 {
         return 0;
@@ -411,7 +411,7 @@ fn range_cutoff(days: i64) -> i64 {
 }
 
 impl Store {
-    /// 报表:按日聚合,四项用量分列(趋势图堆叠用)
+    /// 报表：按日聚合，四项用量分列（趋势图堆叠用）
     pub fn report_daily(&self, days: i64) -> Vec<DayUsage> {
         let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(
@@ -437,25 +437,25 @@ impl Store {
         }
     }
 
-    /// 报表:按模型聚合占比
+    /// 报表：按模型聚合占比
     pub fn report_by_model(&self, days: i64) -> Vec<SliceUsage> {
         self.report_slice(days, "model")
     }
 
-    /// 报表:按供应商聚合占比(provider 为 NULL 计入 'unknown')
+    /// 报表：按供应商聚合占比（provider 为 NULL 计入 'unknown'）
     pub fn report_by_provider(&self, days: i64) -> Vec<SliceUsage> {
         self.report_slice(days, "provider")
     }
 
-    /// 报表:按维度聚合内部实现(审查 3.3:两份静态 SQL 取代 format! 拼列名,
-    /// 从"约定只传内部常量"升级为"结构上不可能注入")
-    /// 模型名按小写归一(本机历史数据存在 GLM-5.3/glm-5.3 大小写混用,避免切成两块)
+    /// 报表：按维度聚合内部实现（审查 3.3：两份静态 SQL 取代 format! 拼列名，
+    /// 从"约定只传内部常量"升级为"结构上不可能注入"）
+    /// 模型名按小写归一（本机历史数据存在 GLM-5.3/glm-5.3 大小写混用，避免切成两块）
     fn report_slice(&self, days: i64, label_expr: &str) -> Vec<SliceUsage> {
         let group_expr = match label_expr {
             "model" => "LOWER(model)",
             "provider" => "COALESCE(provider,'unknown')",
             other => {
-                log::warn!("report_slice 收到未知维度 {other},拒绝执行");
+                log::warn!("report_slice 收到未知维度 {other}，拒绝执行");
                 return vec![];
             }
         };
@@ -481,7 +481,7 @@ impl Store {
         }
     }
 
-    /// 报表:星期×小时用量热力图(本机时区)
+    /// 报表：星期×小时用量热力图（本机时区）
     pub fn report_heatmap(&self, days: i64) -> Vec<HeatCell> {
         let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(
@@ -511,7 +511,7 @@ impl Store {
 mod tests {
     use super::*;
 
-    /// 生成临时测试库路径(进程级唯一,避免并行测试互踩)
+    /// 生成临时测试库路径（进程级唯一，避免并行测试互踩）
     fn tmp_db(tag: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
         p.push(format!("at-test-{}-{}.db", tag, std::process::id()));
@@ -545,7 +545,7 @@ mod tests {
             store.set_setting("k", "v");
             assert_eq!(store.get_setting("k").as_deref(), Some("v"));
         }
-        // 重复打开:迁移幂等,数据仍在
+        // 重复打开：迁移幂等，数据仍在
         let store2 = Store::open(&path).unwrap();
         assert_eq!(store2.get_setting("k").as_deref(), Some("v"));
         let _ = std::fs::remove_file(&path);
@@ -557,30 +557,30 @@ mod tests {
         let store = Store::open(&path).unwrap();
         let rows = vec![sample_usage(1_000), sample_usage(2_000)];
         assert_eq!(store.insert_usage(&rows), 2);
-        // 同一批再插:全部命中幂等键,0 行新增
+        // 同一批再插：全部命中幂等键，0 行新增
         assert_eq!(store.insert_usage(&rows), 0);
-        // 交错重复:仅新行入库
+        // 交错重复：仅新行入库
         let mut again = rows.clone();
         again.push(sample_usage(3_000));
         assert_eq!(store.insert_usage(&again), 1);
         let _ = std::fs::remove_file(&path);
     }
 
-    /// 同幂等键多快照:仅四项合计更大的行才覆盖(与 CC 流式去重口径一致);
+    /// 同幂等键多快照：仅四项合计更大的行才覆盖（与 CC 流式去重口径一致）；
     /// 更小快照重复采集不回退
     #[test]
     fn test_usage_upsert_keeps_max_snapshot() {
         let path = tmp_db("upsert");
         let store = Store::open(&path).unwrap();
-        // 首插:流式中途的小快照
+        // 首插：流式中途的小快照
         assert_eq!(store.insert_usage(&[sample_usage(1_000)]), 1);
-        // 同键更大快照(流式写全):覆盖
+        // 同键更大快照（流式写全）：覆盖
         let mut bigger = sample_usage(1_000);
         bigger.input_tokens = Some(5_000);
         assert_eq!(store.insert_usage(&[bigger]), 1);
-        // 库中为覆盖后的值(session_usage_total = input+output)
+        // 库中为覆盖后的值（session_usage_total = input+output）
         assert_eq!(store.session_usage_total("zcode:abc"), 5_200);
-        // 更小快照重复采到:不覆盖、不变更
+        // 更小快照重复采到：不覆盖、不变更
         assert_eq!(store.insert_usage(&[sample_usage(1_000)]), 0);
         assert_eq!(store.session_usage_total("zcode:abc"), 5_200);
         let _ = std::fs::remove_file(&path);
@@ -615,12 +615,12 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// 报表聚合:模型/供应商/日/热力图;总量守恒与排序(TZ 无关断言为主)
+    /// 报表聚合：模型/供应商/日/热力图；总量守恒与排序（TZ 无关断言为主）
     #[test]
     fn test_report_aggregates() {
         let path = tmp_db("report");
         let store = Store::open(&path).unwrap();
-        let row_sum = 4_200i64; // sample_usage 四项之和(1000+200+3000+0)
+        let row_sum = 4_200i64; // sample_usage 四项之和（1000+200+3000+0）
         let r1 = sample_usage(1_000);
         let mut r2 = sample_usage(2_000);
         r2.session_id = "zcode:b".into();
@@ -628,7 +628,7 @@ mod tests {
         let r3 = sample_usage(200_000); // 与 r1 同模型不同会话/时间
         store.insert_usage(&[r1.clone(), r2.clone(), r3]);
 
-        // 按模型:glm-5.3 两行合计在前(降序),flash 在后
+        // 按模型：glm-5.3 两行合计在前（降序），flash 在后
         let models = store.report_by_model(0);
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].label, "glm-5.3");
@@ -636,18 +636,18 @@ mod tests {
         assert_eq!(models[1].label, "glm-5.3-flash");
         assert_eq!(models[1].total, row_sum);
 
-        // 按供应商:全部 glm → 单条
+        // 按供应商：全部 glm → 单条
         let providers = store.report_by_provider(0);
         assert_eq!(providers.len(), 1);
         assert_eq!(providers[0].label, "glm");
         assert_eq!(providers[0].total, row_sum * 3);
 
-        // 热力图:总量守恒,cell 落在合法范围
+        // 热力图：总量守恒，cell 落在合法范围
         let heat = store.report_heatmap(0);
         assert_eq!(heat.iter().map(|c| c.total).sum::<i64>(), row_sum * 3);
         assert!(heat.iter().all(|c| (0..=6).contains(&c.weekday) && (0..=23).contains(&c.hour)));
 
-        // 按日:日字符串格式、总量守恒
+        // 按日：日字符串格式、总量守恒
         let daily = store.report_daily(0);
         assert!(!daily.is_empty());
         let sum: i64 = daily

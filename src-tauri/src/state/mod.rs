@@ -1,46 +1,46 @@
-//! 状态聚合器:把三条数据源(hooks 事件 > 活动启发式 > 进程枚举)融合为会话状态,
+//! 状态聚合器：把三条数据源（hooks 事件 > 活动启发式 > 进程枚举）融合为会话状态，
 //! 并聚合出灵动岛收缩态。设计依据 docs/02-DESIGN.md §2.3。
-//! 计算均为纯函数(便于全矩阵测试);服务调度见 service.rs。
+//! 计算均为纯函数（便于全矩阵测试）；服务调度见 service.rs。
 
 pub mod service;
 
 use serde::{Deserialize, Serialize};
 
-/// 会话状态机(serde 序列化供前端使用)
+/// 会话状态机（serde 序列化供前端使用）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionState {
-    /// 工作中(呼吸绿)
+    /// 工作中（呼吸绿）
     Working,
-    /// 回合完成/空闲(常亮绿)
+    /// 回合完成/空闲（常亮绿）
     Idle,
-    /// 等待用户输入或批准(琥珀)
+    /// 等待用户输入或批准（琥珀）
     Waiting,
-    /// 出错:限流/额度耗尽/进程退出(红,不受看门狗影响)
+    /// 出错：限流/额度耗尽/进程退出（红，不受看门狗影响）
     Error,
     /// 会话结束/进程不在
     Offline,
 }
 
-/// 灵动岛收缩态(聚合全部会话)
+/// 灵动岛收缩态（聚合全部会话）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IslandState {
-    /// 无任何会话(灰)
+    /// 无任何会话（灰）
     NoSessions,
-    /// 全部空闲(常亮绿)
+    /// 全部空闲（常亮绿）
     AllIdle,
-    /// 任一会话工作中(呼吸绿)
+    /// 任一会话工作中（呼吸绿）
     AnyWorking,
-    /// 任一等待输入(琥珀)
+    /// 任一等待输入（琥珀）
     AnyWaiting,
-    /// 任一出错(红,最高优先级)
+    /// 任一出错（红，最高优先级）
     AnyError,
 }
 
-/// 限流/额度类错误关键词(来源:glm-quota-line 同款正则 + 常见补充,01-RESEARCH §7)。
-/// 审查 3.2 收紧:"额度/频率"这类宽词必须与状态词组合命中,避免普通通知
-/// (如"额度明细已生成")被误判为 error
+/// 限流/额度类错误关键词（来源：glm-quota-line 同款正则 + 常见补充，01-RESEARCH §7）。
+/// 审查 3.2 收紧："额度/频率"这类宽词必须与状态词组合命中，避免普通通知
+/// （如"额度明细已生成"）被误判为 error
 fn is_rate_limit_message(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
     if m.contains("rate limit")
@@ -62,39 +62,39 @@ fn is_rate_limit_message(msg: &str) -> bool {
     (m.contains("额度") && quota_status) || (m.contains("频率") && freq_status)
 }
 
-/// 看门狗:working 状态无活动的最长容忍(毫秒),超时回落 idle
+/// 看门狗：working 状态无活动的最长容忍（毫秒），超时回落 idle
 const WATCHDOG_MS: i64 = 5 * 60 * 1000;
-/// hooks 事件的有效窗口(毫秒):窗口内事件驱动状态;
-/// 必须大于看门狗窗口,否则看门狗分支不可达;超窗回落启发式
+/// hooks 事件的有效窗口（毫秒）：窗口内事件驱动状态；
+/// 必须大于看门狗窗口，否则看门狗分支不可达；超窗回落启发式
 const HOOK_FRESH_MS: i64 = 30 * 60 * 1000;
-/// 活动启发式窗口:最近 usage/文件写入在此窗口内视为工作中(毫秒)
+/// 活动启发式窗口：最近 usage/文件写入在此窗口内视为工作中（毫秒）
 const ACTIVITY_FRESH_MS: i64 = 90 * 1000;
-/// 错误信号的持续窗口(毫秒):窗口外的历史错误不再标红(service 层复用)
+/// 错误信号的持续窗口（毫秒）：窗口外的历史错误不再标红（service 层复用）
 pub(crate) const ERROR_FRESH_MS: i64 = 10 * 60 * 1000;
 
-/// 单会话状态判定的输入信号(三级数据源的快照)
+/// 单会话状态判定的输入信号（三级数据源的快照）
 #[derive(Debug, Clone, Default)]
 pub struct SessionSignals {
-    /// 最近的 hook 事件(hook 名 + 时间戳毫秒);None = 未装 hooks 或无事件
+    /// 最近的 hook 事件（hook 名 + 时间戳毫秒）；None = 未装 hooks 或无事件
     pub last_hook: Option<(String, i64)>,
-    /// Notification 消息文本(用于限流判定)
+    /// Notification 消息文本（用于限流判定）
     pub notification_message: Option<String>,
-    /// 最近一次模型调用/文件活动时间(毫秒)
+    /// 最近一次模型调用/文件活动时间（毫秒）
     pub last_activity_at: Option<i64>,
-    /// ZCode model_usage 的最近 error_type(毫秒, 字符串)
+    /// ZCode model_usage 的最近 error_type（毫秒， 字符串）
     pub recent_error: Option<(i64, String)>,
-    /// Agent 进程是否在运行(L0 兜底)
+    /// Agent 进程是否在运行（L0 兜底）
     pub process_alive: bool,
 }
 
-/// 计算单会话状态(纯函数;now 为当前毫秒)
+/// 计算单会话状态（纯函数；now 为当前毫秒）
 ///
-/// 优先级:error(限流消息/最近错误)> hooks 事件 > 活动启发式 > 进程枚举。
-/// 看门狗:hooks 给出 working 但超 WATCHDOG_MS 无任何新信号 → 回落 idle。
-/// 注:额度耗尽(5h 100%)不改写会话状态(M1-6)——service 层产出快照级
-/// quota_exhausted 标志,由前端驱动胶囊/贴边标签变红,会话状态保持真实值。
+/// 优先级：error（限流消息/最近错误）> hooks 事件 > 活动启发式 > 进程枚举。
+/// 看门狗：hooks 给出 working 但超 WATCHDOG_MS 无任何新信号 → 回落 idle。
+/// 注：额度耗尽（5h 100%）不改写会话状态（M1-6）——service 层产出快照级
+/// quota_exhausted 标志，由前端驱动胶囊/贴边标签变红，会话状态保持真实值。
 pub fn compute_state(sig: &SessionSignals, now: i64) -> SessionState {
-    // ① error 判定(不受看门狗影响)
+    // ① error 判定（不受看门狗影响）
     if let Some(msg) = sig.notification_message.as_deref() {
         if is_rate_limit_message(msg) {
             return SessionState::Error;
@@ -114,7 +114,7 @@ pub fn compute_state(sig: &SessionSignals, now: i64) -> SessionState {
         .unwrap_or(i64::MIN);
     let fresh = now.saturating_sub(last_signal) <= WATCHDOG_MS;
 
-    // ② hooks 事件驱动(事件在有效窗口内才可信)
+    // ② hooks 事件驱动（事件在有效窗口内才可信）
     if let Some((hook, ts)) = &sig.last_hook {
         if now - ts <= HOOK_FRESH_MS {
             return match hook.as_str() {
@@ -125,18 +125,18 @@ pub fn compute_state(sig: &SessionSignals, now: i64) -> SessionState {
                 "Stop" => SessionState::Idle,
                 "SessionEnd" => SessionState::Offline,
                 _ => {
-                    // 未知事件名:退到启发式
+                    // 未知事件名：退到启发式
                     heuristic(sig, now)
                 }
             };
         }
     }
 
-    // ③ 无新鲜 hooks:活动启发式 + 进程枚举
+    // ③ 无新鲜 hooks：活动启发式 + 进程枚举
     heuristic(sig, now)
 }
 
-/// 启发式:近 ACTIVITY_FRESH_MS 有活动 → working;否则进程在 → idle;都不在 → offline
+/// 启发式：近 ACTIVITY_FRESH_MS 有活动 → working；否则进程在 → idle；都不在 → offline
 fn heuristic(sig: &SessionSignals, now: i64) -> SessionState {
     if let Some(ts) = sig.last_activity_at {
         if now - ts <= ACTIVITY_FRESH_MS {
@@ -150,7 +150,7 @@ fn heuristic(sig: &SessionSignals, now: i64) -> SessionState {
     }
 }
 
-/// 聚合岛收缩态:Error > Waiting > Working > Idle;无会话 → NoSessions
+/// 聚合岛收缩态：Error > Waiting > Working > Idle；无会话 → NoSessions
 pub fn aggregate(sessions: &[SessionState]) -> IslandState {
     if sessions.is_empty() {
         return IslandState::NoSessions;
@@ -186,21 +186,21 @@ mod tests {
         // 中文限流
         s.notification_message = Some("请求过于频繁,请稍后再试".into());
         assert_eq!(compute_state(&s, NOW), SessionState::Error);
-        // 普通通知(非限流)→ waiting
+        // 普通通知（非限流）→ waiting
         s.notification_message = Some("Claude needs your permission".into());
         assert_eq!(compute_state(&s, NOW), SessionState::Waiting);
-        // 审查 3.2:宽词必须与状态词组合——"额度已耗尽"算错误
+        // 审查 3.2：宽词必须与状态词组合——"额度已耗尽"算错误
         s.notification_message = Some("5 小时额度已耗尽,请等待重置".into());
         assert_eq!(compute_state(&s, NOW), SessionState::Error);
-        // "额度"单独出现(如明细提示)不再误判 error → waiting
+        // "额度"单独出现（如明细提示）不再误判 error → waiting
         s.notification_message = Some("本月额度明细已生成".into());
         assert_eq!(compute_state(&s, NOW), SessionState::Waiting);
-        // "频率"单独出现不再误判;"频率过快"仍算错误
+        // "频率"单独出现不再误判；"频率过快"仍算错误
         s.notification_message = Some("采样频率说明".into());
         assert_eq!(compute_state(&s, NOW), SessionState::Waiting);
         s.notification_message = Some("请求频率过快".into());
         assert_eq!(compute_state(&s, NOW), SessionState::Error);
-        // 最近错误(ZCode error_type)→ error;窗口外不标红
+        // 最近错误（ZCode error_type）→ error；窗口外不标红
         let mut s2 = sig();
         s2.recent_error = Some((NOW - 60_000, "api_error".into()));
         assert_eq!(compute_state(&s2, NOW), SessionState::Error);
@@ -220,14 +220,14 @@ mod tests {
         // SessionEnd → offline
         s.last_hook = Some(("SessionEnd".into(), NOW - 1000));
         assert_eq!(compute_state(&s, NOW), SessionState::Offline);
-        // 看门狗:PreToolUse 后超 5 分钟无新信号 → idle
+        // 看门狗：PreToolUse 后超 5 分钟无新信号 → idle
         s.last_hook = Some(("PreToolUse".into(), NOW - WATCHDOG_MS - 1));
         assert_eq!(compute_state(&s, NOW), SessionState::Idle);
     }
 
     #[test]
     fn test_heuristic_fallback() {
-        // 无 hooks:近 90s 有活动 → working
+        // 无 hooks：近 90s 有活动 → working
         let mut s = sig();
         s.last_activity_at = Some(NOW - 30_000);
         assert_eq!(compute_state(&s, NOW), SessionState::Working);

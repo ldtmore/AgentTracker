@@ -1,7 +1,7 @@
 /**
- * 报表页(M1-1):token 用量统计窗口 —— 每日趋势 / 周×小时热力图 / 模型与供应商占比
- * 数据来自本地 SQLite(usage_records),Rust 侧聚合,前端 ECharts 按需渲染;
- * 时间口径为本机时区(Asia/Shanghai),范围切换重新拉取
+ * 报表页（M1-1）：token 用量统计窗口 —— 每日趋势 / 周×小时热力图 / 模型与供应商占比
+ * 数据来自本地 SQLite(usage_records)，Rust 侧聚合，前端 ECharts 按需渲染；
+ * 时间口径为本机时区（Asia/Shanghai），范围切换重新拉取
  */
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -20,7 +20,7 @@ import { fmtTokens } from "../shared/types";
 import { useTheme } from "../shared/theme";
 import "./report.css";
 
-// 按需注册用到的图表与组件(01-RESEARCH §9,减小 bundle)
+// 按需注册用到的图表与组件（01-RESEARCH §9，减小 bundle）
 echarts.use([
   BarChart,
   HeatmapChart,
@@ -32,7 +32,7 @@ echarts.use([
   CanvasRenderer,
 ]);
 
-/** 每日聚合行(对应 Rust store::DayUsage) */
+/** 每日聚合行（对应 Rust store：：DayUsage） */
 interface DayUsage {
   day: string;
   input: number;
@@ -41,20 +41,20 @@ interface DayUsage {
   cache_creation: number;
 }
 
-/** 模型/供应商占比行(对应 store::SliceUsage) */
+/** 模型/供应商占比行（对应 store：：SliceUsage） */
 interface SliceUsage {
   label: string;
   total: number;
 }
 
-/** 热力图单元(对应 store::HeatCell) */
+/** 热力图单元（对应 store：：HeatCell） */
 interface HeatCell {
   weekday: number; // 0=周日
   hour: number;
   total: number;
 }
 
-/** 时间范围选项(days=0 表示全部历史) */
+/** 时间范围选项（days=0 表示全部历史） */
 const RANGES = [
   { label: "近 7 天", days: 7 },
   { label: "近 30 天", days: 30 },
@@ -64,7 +64,7 @@ const RANGES = [
 
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-/** 堆叠分类与配色(暗色科技风,与岛面板一致) */
+/** 堆叠分类与配色（暗色科技风，与岛面板一致） */
 const STACK = [
   { key: "input" as const, name: "输入", color: "#60a5fa" },
   { key: "output" as const, name: "输出", color: "#34d399" },
@@ -83,7 +83,7 @@ export default function Report() {
   const [heat, setHeat] = useState<HeatCell[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  // 范围切换即全量重拉(本地查询,毫秒级)
+  // 范围切换即全量重拉（本地查询，毫秒级）
   useEffect(() => {
     let alive = true;
     setLoaded(false);
@@ -109,13 +109,13 @@ export default function Report() {
     };
   }, [days]);
 
-  // 图表主题色(M1-4):轴线/图例文字、网格线、饼图标签随主题切换;
-  // 序列配色(STACK/PIE_COLORS/热力色阶)为高饱和色,双主题通用不再拆分
+  // 图表主题色（M1-4）：轴线/图例文字、网格线、饼图标签随主题切换；
+  // 序列配色（STACK/PIE_COLORS/热力色阶）为高饱和色，双主题通用不再拆分
   const axisText = { color: theme === "dark" ? "#9ca3af" : "#57606a" };
   const splitLine = theme === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)";
   const pieLabel = theme === "dark" ? "#d1d5db" : "#424a53";
 
-  // 趋势图:四项用量堆叠柱
+  // 趋势图：四项用量堆叠柱
   const trendOption = useMemo<EChartsCoreOption>(
     () => ({
       tooltip: { trigger: "axis" },
@@ -143,7 +143,7 @@ export default function Report() {
     [daily, theme],
   );
 
-  // 热力图:列=小时,行=星期,色阶=token 总量
+  // 热力图：列=小时，行=星期，色阶=token 总量
   const heatOption = useMemo<EChartsCoreOption>(() => {
     const max = heat.reduce((m, c) => Math.max(m, c.total), 0);
     return {
@@ -178,7 +178,7 @@ export default function Report() {
     };
   }, [heat, theme]);
 
-  // 占比饼图(模型/供应商共用模板)
+  // 占比饼图（模型/供应商共用模板）
   const pieOption = (data: SliceUsage[]): EChartsCoreOption => ({
     tooltip: {
       formatter: (p: { name: string; value: number; percent: number }) =>
@@ -221,11 +221,11 @@ export default function Report() {
       ) : (
         <>
           <section className="rp-card">
-            <div className="rp-card-title">每日 Token 趋势(堆叠:输入/输出/缓存)</div>
+            <div className="rp-card-title">每日 Token 趋势（堆叠：输入/输出/缓存）</div>
             <Chart option={trendOption} height={280} />
           </section>
           <section className="rp-card">
-            <div className="rp-card-title">周 × 小时用量热力图(本机时区)</div>
+            <div className="rp-card-title">周 × 小时用量热力图（本机时区）</div>
             <Chart option={heatOption} height={250} />
           </section>
           <div className="rp-grid">

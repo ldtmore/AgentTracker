@@ -1,8 +1,8 @@
-/* 报表页样式(常规窗口;M1-4 起色板走 App.css 的主题变量,支持深浅双主题,与设置页同族) */
+/* 报表页样式（常规窗口；M1-4 起色板走 App.css 的主题变量，支持深浅双主题，与设置页同族） */
 
 .rp-root {
   box-sizing: border-box;
-  /* 自身作为滚动容器(与设置页同模式):全局 App.css 对 body 设了 overflow:hidden,
+  /* 自身作为滚动容器（与设置页同模式）：全局 App.css 对 body 设了 overflow:hidden，
      内容超出窗口高度时由 .rp-root 出滚动条 */
   height: 100vh;
   overflow-y: auto;
@@ -16,7 +16,7 @@
   gap: 12px;
 }
 
-/* 滚动条:与设置页/岛面板同款(6px 细条半透明,悬停加亮) */
+/* 滚动条：与设置页/岛面板同款（6px 细条半透明，悬停加亮） */
 .rp-root::-webkit-scrollbar {
   width: 6px;
 }

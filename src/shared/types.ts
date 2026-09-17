@@ -1,5 +1,5 @@
 /**
- * 与 Rust 侧 serde 输出保持一致的快照类型(state/service.rs)
+ * 与 Rust 侧 serde 输出保持一致的快照类型（state/service.rs）
  */
 
 export type SessionState =
@@ -38,24 +38,24 @@ export interface IslandSnapshot {
   sessions: SessionView[];
   island: IslandStateName;
   quotas: QuotaView[];
-  /** GLM 5h 额度已耗尽(100%):胶囊/标签据此变红,但会话状态保持真实值 */
+  /** GLM 5h 额度已耗尽（100%）：胶囊/标签据此变红，但会话状态保持真实值 */
   quota_exhausted: boolean;
-  /** 采集源连续失败(2026-09-17 审查新增):岛收缩态据此提示"采集异常" */
+  /** 采集源连续失败（2026-09-17 审查新增）：岛收缩态据此提示"采集异常" */
   degraded?: boolean;
   generated_at: number;
 }
 
-/** 额度提醒阈值(设置页存储,前端启动时加载;默认 80/95) */
+/** 额度提醒阈值（设置页存储，前端启动时加载；默认 80/95） */
 export interface Thresholds {
   warn: number;
   danger: number;
 }
 
-/** 可监控的 Agent 定义(设置页选择项;implemented=false 表示适配器待开发,勾选暂不采集) */
+/** 可监控的 Agent 定义（设置页选择项；implemented=false 表示适配器待开发，勾选暂不采集） */
 export const AGENT_DEFS: {
   id: string;
   label: string;
-  /** 系统默认身份色(用户可在设置页自定义) */
+  /** 系统默认身份色（用户可在设置页自定义） */
   color: string;
   implemented: boolean;
 }[] = [
@@ -65,12 +65,12 @@ export const AGENT_DEFS: {
   { id: "claude-desktop", label: "Claude Desktop", color: "#a78bfa", implemented: false },
 ];
 
-/** Agent 默认身份色(id → 颜色;可被用户自定义覆盖) */
+/** Agent 默认身份色（id → 颜色；可被用户自定义覆盖） */
 export const AGENT_COLORS: Record<string, string> = Object.fromEntries(
   AGENT_DEFS.map((a) => [a.id, a.color]),
 );
 
-/** 用户自定义色注册表(运行时由 App 从设置注入;颜色 = 身份,状态用亮度/动效表达) */
+/** 用户自定义色注册表（运行时由 App 从设置注入；颜色 = 身份，状态用亮度/动效表达） */
 let currentColors: Record<string, string> = {};
 
 export function setAgentColors(colors: Record<string, string>) {
@@ -79,7 +79,7 @@ export function setAgentColors(colors: Record<string, string>) {
 
 const FALLBACK_COLORS = ["#a78bfa", "#38bdf8", "#f472b6", "#facc15", "#4ade80", "#fb7185"];
 
-/** 取 Agent 身份色:用户自定义 → 默认表 → 未知 Agent 按名字散列稳定分配 */
+/** 取 Agent 身份色：用户自定义 → 默认表 → 未知 Agent 按名字散列稳定分配 */
 export function agentColor(agent: string): string {
   const custom = currentColors[agent];
   if (custom) return custom;
@@ -99,7 +99,7 @@ export const SESSION_META: Record<SessionState, { dot: string; label: string }> 
   offline: { dot: "dot-gray", label: "离线" },
 };
 
-/** token 数值缩写(K/M) */
+/** token 数值缩写（K/M） */
 export function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${Math.round(n / 1_000)}K`;

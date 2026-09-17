@@ -1,6 +1,6 @@
 /**
- * ECharts React 薄封装(01-RESEARCH §9 社区标准配方):
- * 挂载时 init → 卸载时 dispose(不销毁会泄漏 zrender 实例)→
+ * ECharts React 薄封装（01-RESEARCH §9 社区标准配方）：
+ * 挂载时 init → 卸载时 dispose（不销毁会泄漏 zrender 实例）→
  * ResizeObserver 监听容器尺寸变化触发 resize → option 变更时 setOption
  */
 import { useEffect, useRef } from "react";
@@ -16,7 +16,7 @@ export default function Chart({
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
-  // 生命周期:仅挂载/卸载各执行一次
+  // 生命周期：仅挂载/卸载各执行一次
   useEffect(() => {
     const el = ref.current!;
     const chart = echarts.init(el);
@@ -29,7 +29,7 @@ export default function Chart({
     };
   }, []);
 
-  // 数据/配置更新:复用已有实例,不重建
+  // 数据/配置更新：复用已有实例，不重建
   useEffect(() => {
     const el = ref.current;
     if (!el) return;

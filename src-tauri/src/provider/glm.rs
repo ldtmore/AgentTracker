@@ -1,34 +1,34 @@
-//! GLM Coding Plan 适配器:查询 5 小时/每周积分窗口用量与重置时间。
-//! 接口与响应格式来自本机实测(2026-09-16,见 docs/01-RESEARCH.md §7/§9):
+//! GLM Coding Plan 适配器：查询 5 小时/每周积分窗口用量与重置时间。
+//! 接口与响应格式来自本机实测（2026-09-16，见 docs/01-RESEARCH.md §7/§9）：
 //!   GET {origin}/api/monitor/usage/quota/limit   Header: Authorization: <裸key>
-//!   data.limits[] 中 TOKENS_LIMIT+number=5 → 5h 窗口;number=1&unit=6 → 周窗口;
-//!   percentage 为已用百分比;nextResetTime 为 Unix 毫秒。
+//!   data.limits[] 中 TOKENS_LIMIT+number=5 → 5h 窗口；number=1&unit=6 → 周窗口；
+//!   percentage 为已用百分比；nextResetTime 为 Unix 毫秒。
 
 use std::path::PathBuf;
 
 use crate::provider::ProviderAdapter;
 use crate::store::QuotaRow;
 
-/// GLM 平台端点(国内/国际)
+/// GLM 平台端点（国内/国际）
 pub const BASE_BIGMODEL: &str = "https://open.bigmodel.cn";
 pub const BASE_ZAI: &str = "https://api.z.ai";
 
 pub struct GlmProvider {
     /// API origin(如 https://open.bigmodel.cn)
     base: String,
-    /// Coding Plan API key(与 ANTHROPIC_AUTH_TOKEN 同值)
+    /// Coding Plan API key（与 ANTHROPIC_AUTH_TOKEN 同值）
     token: String,
-    /// 复用的 blocking 客户端(审查 2.2.5):每 5min 一次的查询共享连接池与
-    /// TLS 会话,替代旧的"每次请求新建 Client";自带 5s 超时
+    /// 复用的 blocking 客户端（审查 2.2.5）：每 5min 一次的查询共享连接池与
+    /// TLS 会话，替代旧的"每次请求新建 Client"；自带 5s 超时
     http: reqwest::blocking::Client,
 }
 
-/// 凭据发现结果:来自设置/环境变量/claude-menu 配置
+/// 凭据发现结果：来自设置/环境变量/claude-menu 配置
 #[derive(Debug)]
 pub struct GlmCreds {
     pub base: String,
     pub token: String,
-    pub source: &'static str, // 凭据来源,用于设置页展示
+    pub source: &'static str, // 凭据来源，用于设置页展示
 }
 
 impl GlmProvider {
@@ -43,9 +43,9 @@ impl GlmProvider {
         }
     }
 
-    /// 凭据发现链(优先级从高到低):
-    /// ① 显式传入(应用设置)→ ② 环境变量 → ③ ~\.claude\suppliers.json 自动发现
-    /// (claude-menu 的供应商配置文件,选 base 含 bigmodel.cn / z.ai 的条目)
+    /// 凭据发现链（优先级从高到低）：
+    /// ① 显式传入（应用设置）→ ② 环境变量 → ③ ~\.claude\suppliers.json 自动发现
+    /// （claude-menu 的供应商配置文件，选 base 含 bigmodel.cn / z.ai 的条目）
     pub fn discover() -> Option<GlmCreds> {
         // ② 环境变量
         if let (Ok(base), Ok(tok)) = (
@@ -60,7 +60,7 @@ impl GlmProvider {
                 return Some(GlmCreds { base: origin, token: tok, source: "环境变量" });
             }
         }
-        // ③ suppliers.json(键名带 "env:" 前缀)
+        // ③ suppliers.json（键名带 "env:" 前缀）
         if let Some(c) = discover_from_suppliers() {
             return Some(c);
         }
@@ -75,7 +75,7 @@ impl ProviderAdapter for GlmProvider {
 
     fn fetch_quota(&self) -> anyhow::Result<Vec<QuotaRow>> {
         let url = format!("{}/api/monitor/usage/quota/limit", self.base);
-        // 失败必须留痕(审查 1.1):此处降级为"显示最近快照",但不允许无痕降级
+        // 失败必须留痕（审查 1.1）：此处降级为"显示最近快照"，但不允许无痕降级
         let result = (|| -> anyhow::Result<Vec<QuotaRow>> {
             let resp = self
                 .http
@@ -91,18 +91,18 @@ impl ProviderAdapter for GlmProvider {
         })();
         match result {
             Ok(rows) => {
-                log::debug!("GLM 额度查询成功: {} 条", rows.len());
+                log::debug!("GLM 额度查询成功：{} 条", rows.len());
                 Ok(rows)
             }
             Err(e) => {
-                log::warn!("GLM 额度查询失败(降级为最近快照): {e}");
+                log::warn!("GLM 额度查询失败（降级为最近快照）：{e}");
                 Err(e)
             }
         }
     }
 }
 
-/// 从 claude-menu 的 ~\.claude\suppliers.json 发现 GLM 凭据(只读)
+/// 从 claude-menu 的 ~\.claude\suppliers.json 发现 GLM 凭据（只读）
 fn discover_from_suppliers() -> Option<GlmCreds> {
     let mut path = PathBuf::from(std::env::var_os("USERPROFILE")?);
     path.push(".claude");
@@ -127,11 +127,11 @@ fn discover_from_suppliers() -> Option<GlmCreds> {
     None
 }
 
-// ---------- 响应解析(结构来自 2026-09-16 实测) ----------
+// ---------- 响应解析（结构来自 2026-09-16 实测） ----------
 
 #[derive(serde::Deserialize)]
 struct QuotaResponse {
-    /// 应答成功标志(当前解析只看 data;字段留档便于排查接口异常)
+    /// 应答成功标志（当前解析只看 data；字段留档便于排查接口异常）
     #[serde(default)]
     #[allow(dead_code)]
     success: bool,
@@ -140,7 +140,7 @@ struct QuotaResponse {
 
 #[derive(serde::Deserialize)]
 struct QuotaData {
-    /// 套餐档位:lite/pro/max
+    /// 套餐档位：lite/pro/max
     #[serde(default)]
     #[allow(dead_code)]
     level: Option<String>,
@@ -150,7 +150,7 @@ struct QuotaData {
 
 #[derive(serde::Deserialize)]
 struct LimitItem {
-    /// TOKENS_LIMIT(积分窗口)| TIME_LIMIT(MCP 工具,M1 处理)
+    /// TOKENS_LIMIT（积分窗口）| TIME_LIMIT（MCP 工具，M1 处理）
     #[serde(rename = "type")]
     kind: String,
     #[serde(default)]
@@ -161,12 +161,12 @@ struct LimitItem {
     usage: Option<i64>,
     #[serde(default)]
     #[serde(rename = "currentValue")]
-    /// 已用绝对量:无 total 无法换算百分比,仅留档(见 calc_percent 注释)
+    /// 已用绝对量：无 total 无法换算百分比，仅留档（见 calc_percent 注释）
     #[allow(dead_code)]
     current_value: Option<i64>,
     #[serde(default)]
     remaining: Option<i64>,
-    /// 已用百分比(官方口径,实测为"已用"而非"剩余")
+    /// 已用百分比（官方口径，实测为"已用"而非"剩余"）
     #[serde(default)]
     percentage: Option<f64>,
     #[serde(default)]
@@ -174,7 +174,7 @@ struct LimitItem {
     next_reset_time: Option<i64>,
 }
 
-/// 解析响应 → 额度快照(5h + weekly)
+/// 解析响应 → 额度快照（5h + weekly）
 fn parse_quota(body: &QuotaResponse) -> anyhow::Result<Vec<QuotaRow>> {
     let data = body
         .data
@@ -189,13 +189,13 @@ fn parse_quota(body: &QuotaResponse) -> anyhow::Result<Vec<QuotaRow>> {
         if item.kind != "TOKENS_LIMIT" {
             continue; // TIME_LIMIT(MCP)M1 纳入
         }
-        // number=5 → 5h 窗口;number=1(周)→ weekly
+        // number=5 → 5h 窗口；number=1（周）→ weekly
         let kind = match (item.number, item.unit) {
             (Some(5), _) => "5h",
             (Some(1), Some(6)) => "weekly",
-            _ => continue, // 未知窗口类型,忽略以容忍接口演进
+            _ => continue, // 未知窗口类型，忽略以容忍接口演进
         };
-        // 已用百分比:官方 percentage 优先,缺失时按 usage/remaining 计算
+        // 已用百分比：官方 percentage 优先，缺失时按 usage/remaining 计算
         let used_percent = item
             .percentage
             .or_else(|| calc_percent(item.usage, item.remaining));
@@ -203,7 +203,7 @@ fn parse_quota(body: &QuotaResponse) -> anyhow::Result<Vec<QuotaRow>> {
             provider: "glm".into(),
             window_kind: kind.into(),
             used_percent,
-            used_tokens: None, // TOKENS_LIMIT 仅返回百分比,无绝对量
+            used_tokens: None, // TOKENS_LIMIT 仅返回百分比，无绝对量
             reset_at: item.next_reset_time,
             fetched_at: now,
         });
@@ -214,9 +214,9 @@ fn parse_quota(body: &QuotaResponse) -> anyhow::Result<Vec<QuotaRow>> {
     Ok(out)
 }
 
-/// percentage 缺失时的兜底:仅 usage/remaining 口径能换算出真实百分比;
-/// currentValue 是已用绝对量而非百分比,无 total 无法换算——宁缺毋滥返回
-/// None(UI 显示 "--"),不拿绝对量冒充百分比误导展示
+/// percentage 缺失时的兜底：仅 usage/remaining 口径能换算出真实百分比；
+/// currentValue 是已用绝对量而非百分比，无 total 无法换算——宁缺毋滥返回
+/// None（UI 显示 "--"），不拿绝对量冒充百分比误导展示
 fn calc_percent(usage: Option<i64>, remaining: Option<i64>) -> Option<f64> {
     if let (Some(u), Some(r)) = (usage, remaining) {
         let total = u + r;
@@ -231,7 +231,7 @@ fn calc_percent(usage: Option<i64>, remaining: Option<i64>) -> Option<f64> {
 mod tests {
     use super::*;
 
-    /// 实测响应样例(2026-09-16 本机,数值已核对:89%=5h,52%=周)
+    /// 实测响应样例（2026-09-16 本机，数值已核对：89%=5h，52%=周）
     const REAL_RESP: &str = r#"{
       "code": 200, "msg": "操作成功", "success": true,
       "data": {
@@ -260,23 +260,23 @@ mod tests {
     #[test]
     fn test_fallback_percent() {
         assert_eq!(calc_percent(Some(16), Some(984)), Some(1.6));
-        // currentValue 绝对量不能冒充百分比:无法换算时返回 None
+        // currentValue 绝对量不能冒充百分比：无法换算时返回 None
         assert_eq!(calc_percent(None, None), None);
         assert_eq!(calc_percent(Some(0), Some(0)), None);
     }
 
-    /// 集成:真实调用 Monitor API(手动:cargo test -- --ignored)
+    /// 集成：真实调用 Monitor API（手动：cargo test -- --ignored）
     #[test]
     #[ignore]
     fn test_real_glm_fetch() {
-        let creds = GlmProvider::discover().expect("应能发现 GLM 凭据(环境变量或 suppliers.json)");
-        println!("凭据来源: {}", creds.source);
+        let creds = GlmProvider::discover().expect("应能发现 GLM 凭据（环境变量或 suppliers.json）");
+        println!("凭据来源：{}", creds.source);
         let p = GlmProvider::new(&creds.base, &creds.token);
         let rows = p.fetch_quota().unwrap();
         assert_eq!(rows.len(), 2);
         for r in &rows {
             let pct = r.used_percent.expect("TOKENS_LIMIT 应有百分比");
-            assert!((0.0..=100.0).contains(&pct), "百分比异常: {pct}");
+            assert!((0.0..=100.0).contains(&pct), "百分比异常：{pct}");
             assert!(r.reset_at.unwrap_or(0) > 1_700_000_000_000, "重置时间应为毫秒");
             println!("[{}] 已用 {}% | 重置于 {}", r.window_kind, pct,
                 r.reset_at.map(|t| chrono::DateTime::from_timestamp_millis(t).map(|d| d.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default()).unwrap_or_default());

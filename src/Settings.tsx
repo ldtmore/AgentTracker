@@ -1,14 +1,14 @@
 /**
- * 设置页(T11 / 2026-09-17 重构):分区卡片 + 设置项即时生效
- * - 布局:统一"设置行"(固定标题 + 固定描述 + 右侧控件),按使用频率分五节;
- *   分区头为主标题 + 副标题同行(副标题不换行,窗口最小宽度据此设下限)
- * - 交互:改动即存即生效(无保存按钮、不再保存后自动关窗);开关行标题/描述固定,
- *   状态由 Switch 与徽标表达,文案不随选中态变化(遵循 Fluent 开关文案规范)
- * - 反馈:校验错误内联显示在出错行正下方;操作结果用顶部 toast(成功 2.5s 自动消失,
- *   失败常驻直到下一次提示);凭据/阈值"重启生效"的事实写入行描述,不做打扰式弹提示
- * - Key 回显已存值(2026-09-17 所有者要求,推翻原"不回显"决策);
- *   清空失焦 = 沿用已存 Key 或自动发现链(env / claude-menu),不写空值覆盖
- * - 界面文案一律简体中文标点(2026-09-17 验收建议 3)
+ * 设置页（T11 / 2026-09-17 重构）：分区卡片 + 设置项即时生效
+ * - 布局：统一"设置行"（固定标题 + 固定描述 + 右侧控件），按使用频率分五节；
+ *   分区头为主标题 + 副标题同行（副标题不换行，窗口最小宽度据此设下限）
+ * - 交互：改动即存即生效（无保存按钮、不再保存后自动关窗）；开关行标题/描述固定，
+ *   状态由 Switch 与徽标表达，文案不随选中态变化（遵循 Fluent 开关文案规范）
+ * - 反馈：校验错误内联显示在出错行正下方；操作结果用顶部 toast（成功 2.5s 自动消失，
+ *   失败常驻直到下一次提示）；凭据/阈值"重启生效"的事实写入行描述，不做打扰式弹提示
+ * - Key 回显已存值（2026-09-17 所有者要求，推翻原"不回显"决策）；
+ *   清空失焦 = 沿用已存 Key 或自动发现链（env / claude-menu），不写空值覆盖
+ * - 界面文案一律简体中文标点（2026-09-17 验收建议 3）
  */
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -17,7 +17,7 @@ import { AGENT_COLORS, AGENT_DEFS } from "./shared/types";
 import { asThemeMode, useTheme, type ThemeMode } from "./shared/theme";
 import "./settings.css";
 
-/** 数据保留时长选项(天),按时长降序;12 个月 = 365 天,与后端"未设置默认保留 1 年"一致 */
+/** 数据保留时长选项（天），按时长降序；12 个月 = 365 天，与后端"未设置默认保留 1 年"一致 */
 const CLEANUP_OPTIONS: { label: string; days: number }[] = [
   { label: "12 个月", days: 365 },
   { label: "6 个月", days: 180 },
@@ -28,10 +28,10 @@ const CLEANUP_OPTIONS: { label: string; days: number }[] = [
   { label: "1 天", days: 1 },
 ];
 
-/** 默认保留时长(12 个月;与后端清理默认值 365 天一致) */
+/** 默认保留时长（12 个月；与后端清理默认值 365 天一致） */
 const CLEANUP_DEFAULT_DAYS = 365;
 
-/** 分区卡片:主标题 + 副标题同行(主/副标题关系),下方为设置行列表 */
+/** 分区卡片：主标题 + 副标题同行（主/副标题关系），下方为设置行列表 */
 function Section({
   title,
   desc,
@@ -52,7 +52,7 @@ function Section({
   );
 }
 
-/** 设置行:左 = 固定标题(+可选徽标)+ 固定描述,右 = 控件;error 就近显示在本行下方 */
+/** 设置行：左 = 固定标题（+可选徽标）+ 固定描述，右 = 控件；error 就近显示在本行下方 */
 function Row({
   title,
   badge,
@@ -65,7 +65,7 @@ function Row({
   badge?: React.ReactNode;
   desc?: string;
   error?: string;
-  /** tall:宽控件(输入框)放到文字下方独占一行 */
+  /** tall：宽控件（输入框）放到文字下方独占一行 */
   tall?: boolean;
   children?: React.ReactNode;
 }) {
@@ -89,7 +89,7 @@ function Row({
   );
 }
 
-/** 滑动开关:状态由开/关位置表达,标题文案保持固定 */
+/** 滑动开关：状态由开/关位置表达，标题文案保持固定 */
 function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
@@ -104,7 +104,7 @@ function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
-/** 三档分段选择(主题):点击即切换并全窗口预览 */
+/** 三档分段选择（主题）：点击即切换并全窗口预览 */
 function Segmented({
   value,
   onChange,
@@ -135,7 +135,7 @@ function Segmented({
   );
 }
 
-/** 状态徽标:点色 + 文案(已启用=强调色,未启用=灰),随主题换色 */
+/** 状态徽标：点色 + 文案（已启用=强调色，未启用=灰），随主题换色 */
 function Badge({ on, text }: { on: boolean; text: string }) {
   return (
     <span className={on ? "st-badge st-badge-on" : "st-badge"}>
@@ -145,7 +145,7 @@ function Badge({ on, text }: { on: boolean; text: string }) {
   );
 }
 
-/** 眼睛图标(off=true 画斜线,表示当前隐藏中) */
+/** 眼睛图标（off=true 画斜线，表示当前隐藏中） */
 function EyeIcon({ off }: { off: boolean }) {
   return (
     <svg
@@ -167,37 +167,37 @@ function EyeIcon({ off }: { off: boolean }) {
 }
 
 export default function Settings() {
-  // —— 表单状态(每项改动即时落库,无统一保存按钮) ——
+  // —— 表单状态（每项改动即时落库，无统一保存按钮） ——
   const [glmBase, setGlmBase] = useState("https://open.bigmodel.cn");
-  const [glmToken, setGlmToken] = useState(""); // 输入框内容;回显已存 Key(2026-09-17 所有者要求)
-  const savedTokenRef = useRef(""); // 最近一次落库的 Key:失焦时比对,未变更不重复落库/提示
+  const [glmToken, setGlmToken] = useState(""); // 输入框内容；回显已存 Key（2026-09-17 所有者要求）
+  const savedTokenRef = useRef(""); // 最近一次落库的 Key：失焦时比对，未变更不重复落库/提示
   const [showToken, setShowToken] = useState(false); // 明文/密文切换
-  const [tokenFrom, setTokenFrom] = useState(""); // 已生效凭据来源(聚合器启动时写入)
+  const [tokenFrom, setTokenFrom] = useState(""); // 已生效凭据来源（聚合器启动时写入）
   const [warn, setWarn] = useState("80");
   const [danger, setDanger] = useState("95");
   const [thresholdError, setThresholdError] = useState("");
-  // 数据保留周期(未设置时后端按 1 年清理,前端默认值与之对齐)
+  // 数据保留周期（未设置时后端按 1 年清理，前端默认值与之对齐）
   const [cleanupDays, setCleanupDays] = useState(CLEANUP_DEFAULT_DAYS);
   const [hooksOn, setHooksOn] = useState(false);
-  const [hookBusy, setHookBusy] = useState(false); // 注入/卸载进行中,防连点
+  const [hookBusy, setHookBusy] = useState(false); // 注入/卸载进行中，防连点
   const [autoStart, setAutoStart] = useState(false);
-  // 灵动岛贴边自动隐藏(缺省=开,与 Rust 端 autohide_enabled 的默认一致)
+  // 灵动岛贴边自动隐藏（缺省=开，与 Rust 端 autohide_enabled 的默认一致）
   const [autoHide, setAutoHide] = useState(true);
-  // 悬停自动展开信息卡片(缺省=开;关闭时点击岛展开/收回)
+  // 悬停自动展开信息卡片（缺省=开；关闭时点击岛展开/收回）
   const [hoverCard, setHoverCard] = useState(true);
-  // 监控的 Agent 列表(缺省全选;勾选才采集/监控/展示)
+  // 监控的 Agent 列表（缺省全选；勾选才采集/监控/展示）
   const [agents, setAgents] = useState<string[]>(AGENT_DEFS.map((a) => a.id));
-  // Agent 自定义身份色(未自定义的用系统默认色;隐藏态色块/面板徽标共用)
+  // Agent 自定义身份色（未自定义的用系统默认色；隐藏态色块/面板徽标共用）
   const [agentColors, setAgentColors] = useState<Record<string, string>>({});
-  // 已落库的自定义色:拖拽选色过程中实时改 UI 但不落库,失焦校验撞色后按此回滚
+  // 已落库的自定义色：拖拽选色过程中实时改 UI 但不落库，失焦校验撞色后按此回滚
   const savedColorsRef = useRef<Record<string, string>>({});
   const [colorError, setColorError] = useState("");
-  // 主题模式(跟随系统/深色/浅色,点击即切换全窗口预览)
+  // 主题模式（跟随系统/深色/浅色，点击即切换全窗口预览）
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
-  // 顶部 toast:成功 2.5s 自动消失,失败常驻
+  // 顶部 toast：成功 2.5s 自动消失，失败常驻
   const [toast, setToast] = useState<{ text: string; kind: "ok" | "error" } | null>(null);
   const toastTimer = useRef<number | null>(null);
-  // 主题应用与跟随(设置页自身也随切换即时换色)
+  // 主题应用与跟随（设置页自身也随切换即时换色）
   useTheme();
 
   useEffect(() => {
@@ -205,7 +205,7 @@ export default function Settings() {
       try {
         const s = (await invoke("get_settings")) as Record<string, string>;
         if (s.glm_base) setGlmBase(s.glm_base);
-        // 回显已存 Key(2026-09-17 所有者要求;未配置过则保持空,来源经 glm_token_source 徽标提示)
+        // 回显已存 Key（2026-09-17 所有者要求；未配置过则保持空，来源经 glm_token_source 徽标提示）
         if (s.glm_token) {
           setGlmToken(s.glm_token);
           savedTokenRef.current = s.glm_token;
@@ -214,7 +214,7 @@ export default function Settings() {
         if (s.threshold_danger) setDanger(s.threshold_danger);
         if (s.cleanup_days) {
           const days = Number(s.cleanup_days);
-          // 旧档位(2 年 / 3 年 / 永不)已从选项移除,回落到默认 12 个月,避免下拉框空白
+          // 旧档位（2 年 / 3 年 / 永不）已从选项移除，回落到默认 12 个月，避免下拉框空白
           if (CLEANUP_OPTIONS.some((o) => o.days === days)) setCleanupDays(days);
         }
         if (s.glm_token_source) setTokenFrom(s.glm_token_source);
@@ -252,7 +252,7 @@ export default function Settings() {
     };
   }, []);
 
-  /** 顶部 toast:成功短暂提示后自动消失,失败常驻直到下一次提示覆盖 */
+  /** 顶部 toast：成功短暂提示后自动消失，失败常驻直到下一次提示覆盖 */
   const showToast = (text: string, kind: "ok" | "error") => {
     setToast({ text, kind });
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
@@ -261,7 +261,7 @@ export default function Settings() {
     }
   };
 
-  /** 单键落库;失败经 toast 提示(不阻塞界面);返回是否成功,供调用方决定后续反馈 */
+  /** 单键落库；失败经 toast 提示（不阻塞界面）；返回是否成功，供调用方决定后续反馈 */
   const saveKey = async (key: string, value: string): Promise<boolean> => {
     try {
       await invoke("set_setting", { key, value });
@@ -272,31 +272,31 @@ export default function Settings() {
     }
   };
 
-  /** 主题:点击即持久化并广播(广播含本窗口,useTheme 收到后即时切换 = 即时预览) */
+  /** 主题：点击即持久化并广播（广播含本窗口，useTheme 收到后即时切换 = 即时预览） */
   const changeTheme = async (mode: ThemeMode) => {
     setThemeMode(mode);
     await saveKey("theme", mode);
     await emit("theme-changed", mode).catch(() => {});
   };
 
-  /** 贴边自动隐藏:即存即生效;关掉时若岛正处于隐藏态,Rust 会把它滑回显示 */
+  /** 贴边自动隐藏：即存即生效；关掉时若岛正处于隐藏态，Rust 会把它滑回显示 */
   const toggleAutoHide = async (v: boolean) => {
     setAutoHide(v);
     await saveKey("island_autohide", v ? "1" : "0");
     await invoke("island_refresh").catch(() => {});
   };
 
-  /** 悬停展开:即存并实时推送给岛窗口 */
+  /** 悬停展开：即存并实时推送给岛窗口 */
   const toggleHoverCard = async (v: boolean) => {
     setHoverCard(v);
     await saveKey("hover_expand", v ? "1" : "0");
     await emit("hover-expand-changed", v).catch(() => {});
   };
 
-  /** 已勾选 Agent 的展示色(自定义 → 系统默认) */
+  /** 已勾选 Agent 的展示色（自定义 → 系统默认） */
   const effColor = (id: string) => agentColors[id] ?? AGENT_COLORS[id];
 
-  /** 校验已勾选 Agent 间颜色不重复(颜色 = 身份);通过则落库并推送岛窗口,撞色返回 false */
+  /** 校验已勾选 Agent 间颜色不重复（颜色 = 身份）；通过则落库并推送岛窗口，撞色返回 false */
   const commitColors = async (colors: Record<string, string>, list: string[]) => {
     const seen = new Map<string, string>();
     for (const a of AGENT_DEFS.filter((x) => list.includes(x.id))) {
@@ -314,7 +314,7 @@ export default function Settings() {
     return true;
   };
 
-  /** 勾选/取消 Agent:即存即生效;勾选集变化会改变撞色判定范围,顺带重新校验 */
+  /** 勾选/取消 Agent：即存即生效；勾选集变化会改变撞色判定范围，顺带重新校验 */
   const toggleAgent = async (id: string, checked: boolean) => {
     const next = checked ? [...agents, id] : agents.filter((x) => x !== id);
     setAgents(next);
@@ -322,7 +322,7 @@ export default function Settings() {
     await commitColors(agentColors, next);
   };
 
-  /** 颜色选择失焦 = 改完:撞色回滚本次改动并就近提示,通过则落库 */
+  /** 颜色选择失焦 = 改完：撞色回滚本次改动并就近提示，通过则落库 */
   const onColorBlur = () => {
     commitColors(agentColors, agents).then((ok) => {
       if (!ok) setAgentColors({ ...savedColorsRef.current });
@@ -336,28 +336,28 @@ export default function Settings() {
     showToast("已恢复默认颜色", "ok");
   };
 
-  /** 平台切换:即存;重启后聚合器按新平台查询(事实写入分区副标题,不弹提示) */
+  /** 平台切换：即存；重启后聚合器按新平台查询（事实写入分区副标题，不弹提示） */
   const changeGlmBase = async (v: string) => {
     setGlmBase(v);
     await saveKey("glm_base", v);
   };
 
-  /** API Key 失焦提交:与已存值一致则跳过(防误点失焦重复落库/提示);
-   *  清空失焦 = 沿用已存 Key 或自动发现链,不写空值覆盖。
-   *  保存成功后输入框保留并回正内容(回显),徽标即时点亮 */
+  /** API Key 失焦提交：与已存值一致则跳过（防误点失焦重复落库/提示）；
+   *  清空失焦 = 沿用已存 Key 或自动发现链，不写空值覆盖。
+   *  保存成功后输入框保留并回正内容（回显），徽标即时点亮 */
   const commitToken = async () => {
     const t = glmToken.trim();
     if (!t || t === savedTokenRef.current) return;
     if (await saveKey("glm_token", t)) {
       setGlmToken(t);
       savedTokenRef.current = t;
-      // 重启后聚合器会把徽标改写为实际来源(应用设置)
+      // 重启后聚合器会把徽标改写为实际来源（应用设置）
       setTokenFrom("已保存（重启后生效）");
       showToast("已保存，凭据在重启应用后生效", "ok");
     }
   };
 
-  /** 阈值失焦校验并落库:两个值都合法且琥珀 < 红色才写入,否则就近提示 */
+  /** 阈值失焦校验并落库：两个值都合法且琥珀 < 红色才写入，否则就近提示 */
   const commitThresholds = async () => {
     const w = Number(warn);
     const d = Number(danger);
@@ -375,12 +375,12 @@ export default function Settings() {
     await saveKey("threshold_danger", danger);
   };
 
-  /** Enter 直接提交(失焦提交的快捷路径) */
+  /** Enter 直接提交（失焦提交的快捷路径） */
   const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") (e.target as HTMLInputElement).blur();
   };
 
-  /** hooks 注入/卸载:本地文件操作,带 busy 态防连点 */
+  /** hooks 注入/卸载：本地文件操作，带 busy 态防连点 */
   const toggleHooks = async () => {
     setHookBusy(true);
     try {
@@ -396,7 +396,7 @@ export default function Settings() {
     }
   };
 
-  /** 开机自启:先切换 UI 再落命令,失败回滚并提示 */
+  /** 开机自启：先切换 UI 再落命令，失败回滚并提示 */
   const toggleAutoStart = async (on: boolean) => {
     setAutoStart(on);
     try {

@@ -1,6 +1,6 @@
 /**
- * 展开面板:会话卡片区(活跃优先,可滚动)+ GLM 额度区(双窗口进度条+倒计时)
- * 点击会话卡片的跳转行为由 T10 接入(onClick 预留)
+ * 展开面板：会话卡片区（活跃优先，可滚动）+ GLM 额度区（双窗口进度条+倒计时）
+ * 点击会话卡片的跳转行为由 T10 接入（onClick 预留）
  */
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -14,7 +14,7 @@ const AGENT_BADGE: Record<string, string> = {
   zcode: "ZC",
 };
 
-/** 排序:活跃状态(working/waiting/error)优先,其次按最近活动降序 */
+/** 排序：活跃状态（working/waiting/error）优先，其次按最近活动降序 */
 const ACTIVE_FIRST: Record<string, number> = {
   error: 0,
   waiting: 1,
@@ -35,14 +35,14 @@ function sortSessions(list: SessionView[]): SessionView[] {
 function SessionCard({ s }: { s: SessionView }) {
   const meta = SESSION_META[s.state];
   const project = s.project_dir?.split(/[\\/]/).filter(Boolean).pop() ?? "";
-  // 点击跳转:激活该会话对应的终端/IDE 窗口(T10;未命中静默失败)
+  // 点击跳转：激活该会话对应的终端/IDE 窗口（T10；未命中静默失败）
   const focus = () => {
     invoke("focus_session", { sessionId: s.id }).catch(() => {});
   };
   return (
     <div className="card" data-session-id={s.id} onClick={focus}>
       <span className={`dot ${meta.dot}`} />
-      {/* 徽标底色 = Agent 身份色(与贴边隐藏态色块一致,颜色即身份) */}
+      {/* 徽标底色 = Agent 身份色（与贴边隐藏态色块一致，颜色即身份） */}
       <span className="card-badge" style={{ background: agentColor(s.agent) }}>
         {AGENT_BADGE[s.agent] ?? "??"}
       </span>
@@ -67,7 +67,7 @@ function QuotaLine({
   resetAt: number | null;
   thresholds: Thresholds;
 }) {
-  // 倒计时本地每 30 秒推进一次(快照本身 10s 一刷)
+  // 倒计时本地每 30 秒推进一次（快照本身 10s 一刷）
   const [, force] = useState(0);
   useEffect(() => {
     const t = setInterval(() => force((n) => n + 1), 30_000);
