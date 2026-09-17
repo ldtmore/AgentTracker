@@ -25,7 +25,7 @@
   Agent 已停止桌面控制并清理残留进程/1420 端口
 - git:M1-1/M1-6/M1-7 代码与文档回写已提交推送(aa7a0b3,2026-09-17);
   **2026-09-17 项目更名 AgentTrackerIsland,全量标识更正随本次会话提交**;
-  **M1-4 改动未提交(8 文件),待验收后与文档一并提交**
+  **M1-4 双主题已提交推送(7b5bad3,2026-09-17,10 文件 +332/-103)**
 - 注意(2026-09-17 更名):项目由 AgentTracker 更名为 **AgentTrackerIsland**,实际路径
   F:\MyProjectRepository\AgentTrackerIsland(旧文档中 F:\MyProjectRepository\AgentTracker /
   F:\AgentTracker 均为更名前写法);标识符同步切换:GitHub 仓库 ldtmore/AgentTrackerIsland、
@@ -47,8 +47,7 @@
    (01-RESEARCH §10,适配器待真实样本);M1-2 等所有者搁置问题清单
 2. 所有者 M0 遗留 dev 补验(可并入日常使用):①A1 waiting 场景(hooks+CC 等待输入→岛琥珀);
    ②拖拽记忆;③托盘各菜单项;④上轮修复项抽查(GLM 凭据留空保存→重启→额度仍正常)
-3. **待办:M1-4 改动 git 提交**(代码 9 文件 + 文档 3 处,等所有者确认);
-   下一开发任务按看板顺序(M1-2 等清单,或 M1-5 评估);T10 WT 跳转可随时按待议区线索调试;
+3. 下一开发任务按看板顺序(M1-2 等清单,或 M1-5 评估);T10 WT 跳转可随时按待议区线索调试;
    **构建打包仅当所有者明确宣布"正式对外发布"时执行**(WORKFLOW 构建打包纪律)
 环境提醒:cargo 带 RUSTUP_HOME/CARGO_HOME/PATH,外网走本机代理 127.0.0.1:6478,
 Bash 显式 cd 到项目目录;**dev 验收提示:Agent 会话曾出现托盘菜单误触(键盘事件),
