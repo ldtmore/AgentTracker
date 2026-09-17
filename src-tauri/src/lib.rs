@@ -123,6 +123,7 @@ const SETTING_KEYS_ALLOW: &[&str] = &[
     "threshold_danger",
     "cleanup_days",
     "island_autohide",
+    "island_opacity",
     "hover_expand",
     "agents_enabled",
     "agent_colors",

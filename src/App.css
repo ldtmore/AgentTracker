@@ -9,12 +9,17 @@
   --text-2: #d1d5db;
   --text-3: #9ca3af;
   --text-4: #6b7280;
-  /* 岛收缩态胶囊 / 展开面板 / 贴边隐藏态标签的半透明面层（窗口本身全透明） */
-  --pill-bg: rgba(20, 20, 24, 0.72);
-  --panel-bg: rgba(20, 20, 24, 0.88);
-  --edge-tab-bg: rgba(15, 17, 22, 0.92);
-  /* 贴边标签：分段缝隙描边色（与标签底色同源，视觉上即"缝"）、内发光 */
-  --edge-wedge-stroke: rgba(15, 17, 22, 0.9);
+  /* 岛收缩态胶囊 / 展开面板 / 贴边隐藏态标签的半透明面层（窗口本身全透明）。
+     RGB 与 alpha 拆分：alpha 由设置页「背景不透明度」滑块运行时注入覆盖
+     （shared/islandOpacity.ts 按基准值派生：面板 +0.16、隐藏态 −0.10/下限 0.45）；
+     此处静态值 = 默认基准 72% 的派生结果，仅作 JS 未生效前的兜底 */
+  --pill-rgb: 20, 20, 24;
+  --panel-rgb: 20, 20, 24;
+  --edge-rgb: 15, 17, 22;
+  --pill-alpha: 0.72;
+  --panel-alpha: 0.88;
+  --edge-alpha: 0.62;
+  /* 贴边标签内发光（外阴影伸出窗口矩形的部分会被裁平，故用内发光） */
   --edge-shadow: rgba(0, 0, 0, 0.35);
   /* 常规窗口（设置/报表）不透明根背景 */
   --root-bg: #141418;
@@ -46,16 +51,16 @@
   --switch-off: rgba(255, 255, 255, 0.22);
 }
 
-/* 浅色色板：半透明面层改白系，边框/悬停改黑系低透明度；状态色（绿/琥珀/红）双主题通用 */
+/* 浅色色板：半透明面层改白系 RGB（alpha 与深色共用，随「背景不透明度」滑块统一调节），
+   边框/悬停改黑系低透明度；状态色（绿/琥珀/红）双主题通用 */
 [data-theme="light"] {
   --text-1: #1f2328;
   --text-2: #424a53;
   --text-3: #57606a;
   --text-4: #6e7781;
-  --pill-bg: rgba(255, 255, 255, 0.78);
-  --panel-bg: rgba(255, 255, 255, 0.92);
-  --edge-tab-bg: rgba(255, 255, 255, 0.9);
-  --edge-wedge-stroke: rgba(255, 255, 255, 0.9);
+  --pill-rgb: 255, 255, 255;
+  --panel-rgb: 255, 255, 255;
+  --edge-rgb: 255, 255, 255;
   --edge-shadow: rgba(0, 0, 0, 0.12);
   --root-bg: #f5f6f8;
   --surface: rgba(0, 0, 0, 0.03);
@@ -109,7 +114,7 @@ body,
   align-items: center;
   gap: 10px;
   padding: 0 18px;
-  background: var(--pill-bg);
+  background: rgba(var(--pill-rgb), var(--pill-alpha));
   border: 1px solid var(--border);
 }
 
@@ -221,7 +226,7 @@ body,
   box-sizing: border-box;
   height: 100%;
   border-radius: 16px;
-  background: var(--panel-bg);
+  background: rgba(var(--panel-rgb), var(--panel-alpha));
   border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -411,7 +416,7 @@ body,
 .edge-tab {
   position: absolute;
   box-sizing: border-box;
-  background: var(--edge-tab-bg);
+  background: rgba(var(--edge-rgb), var(--edge-alpha));
   border: 1px solid var(--border-strong);
   display: flex;
   align-items: center;
@@ -562,7 +567,8 @@ body,
 }
 
 .edge-wedge {
-  stroke: var(--edge-wedge-stroke);
+  /* 缝隙描边与隐藏态底色同源同 alpha（视觉上即"缝"），随滑块同步派生 */
+  stroke: rgba(var(--edge-rgb), var(--edge-alpha));
   stroke-width: 1;
   transition: opacity 0.3s ease;
 }

@@ -14,6 +14,11 @@ import EdgeTab from "./island/EdgeTab";
 import Settings from "./Settings";
 import { AGENT_DEFS, setAgentColors } from "./shared/types";
 import { useTheme } from "./shared/theme";
+import {
+  ISLAND_OPACITY_EVENT,
+  applyIslandOpacity,
+  asIslandOpacity,
+} from "./shared/islandOpacity";
 import type { IslandSnapshot, Thresholds } from "./shared/types";
 import "./App.css";
 
@@ -113,6 +118,8 @@ function IslandApp() {
               /* 解析失败用默认色 */
             }
           }
+          // 背景不透明度：搭 bootstrap 重试便车——极早期 invoke 永不落定时靠 1s 重试兜住
+          applyIslandOpacity(asIslandOpacity(s.island_opacity));
           done.settings = true;
         } catch {
           /* 通道未就绪，下轮重试 */
@@ -148,6 +155,16 @@ function IslandApp() {
         setAgents(e.payload.agents);
         setAgentColors(e.payload.colors);
       },
+    );
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
+  // 设置页拖动「背景不透明度」滑块后实时推送 → 重新派生三层 alpha
+  useEffect(() => {
+    const un = listen<number>(ISLAND_OPACITY_EVENT, (e) =>
+      applyIslandOpacity(asIslandOpacity(e.payload)),
     );
     return () => {
       un.then((f) => f());

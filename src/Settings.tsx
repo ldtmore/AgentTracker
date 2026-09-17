@@ -15,6 +15,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { AGENT_COLORS, AGENT_DEFS } from "./shared/types";
 import { asThemeMode, useTheme, type ThemeMode } from "./shared/theme";
+import {
+  ISLAND_OPACITY_DEFAULT,
+  ISLAND_OPACITY_EVENT,
+  ISLAND_OPACITY_KEY,
+  ISLAND_OPACITY_MAX,
+  ISLAND_OPACITY_MIN,
+  asIslandOpacity,
+} from "./shared/islandOpacity";
 import "./settings.css";
 
 /** 数据保留时长选项（天），按时长降序；12 个月 = 365 天，与后端"未设置默认保留 1 年"一致 */
@@ -185,6 +193,10 @@ export default function Settings() {
   const [autoStart, setAutoStart] = useState(false);
   // 灵动岛贴边自动隐藏（缺省=开，与 Rust 端 autohide_enabled 的默认一致）
   const [autoHide, setAutoHide] = useState(true);
+  // 岛背景不透明度（缺省 72%，与历史深色胶囊 alpha 一致；面板/隐藏态按偏移派生）
+  const [islandOpacity, setIslandOpacity] = useState(ISLAND_OPACITY_DEFAULT);
+  // 不透明度落库防抖定时器：拖动中只广播不写库，停手 300ms 后落一次盘
+  const opacitySaveTimer = useRef<number | null>(null);
   // 悬停自动展开信息卡片（缺省=开；关闭时点击岛展开/收回）
   const [hoverCard, setHoverCard] = useState(true);
   // 监控的 Agent 列表（缺省全选；勾选才采集/监控/展示）
@@ -222,6 +234,7 @@ export default function Settings() {
         if (s.glm_token_source) setTokenFrom(s.glm_token_source);
         if (s.island_autohide !== undefined) setAutoHide(s.island_autohide !== "0");
         if (s.hover_expand !== undefined) setHoverCard(s.hover_expand !== "0");
+        if (s.island_opacity !== undefined) setIslandOpacity(asIslandOpacity(s.island_opacity));
         if (s.dev_mode !== undefined) setDevMode(s.dev_mode === "1");
         setThemeMode(asThemeMode(s.theme));
         if (s.agents_enabled) {
@@ -249,9 +262,10 @@ export default function Settings() {
         /* 加载失败保持默认值 */
       }
     })();
-    // 卸载时清掉未触发的 toast 定时器
+    // 卸载时清掉未触发的 toast 与不透明度落库定时器
     return () => {
       if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+      if (opacitySaveTimer.current !== null) window.clearTimeout(opacitySaveTimer.current);
     };
   }, []);
 
@@ -294,6 +308,17 @@ export default function Settings() {
     setHoverCard(v);
     await saveKey("hover_expand", v ? "1" : "0");
     await emit("hover-expand-changed", v).catch(() => {});
+  };
+
+  /** 背景不透明度滑块：拖动中实时广播（岛即实时预览，无需预览控件），
+   *  停手 300ms 后才落库，避免拖动过程高频写库 */
+  const changeIslandOpacity = (v: number) => {
+    setIslandOpacity(v);
+    void emit(ISLAND_OPACITY_EVENT, v).catch(() => {});
+    if (opacitySaveTimer.current !== null) window.clearTimeout(opacitySaveTimer.current);
+    opacitySaveTimer.current = window.setTimeout(() => {
+      void saveKey(ISLAND_OPACITY_KEY, String(v));
+    }, 300);
   };
 
   /** 已勾选 Agent 的展示色（自定义 → 系统默认） */
@@ -448,6 +473,22 @@ export default function Settings() {
           desc="开启：鼠标移入岛即展开卡片 / 关闭：点击展开、再点收回，移出后自动收起"
         >
           <Switch checked={hoverCard} onChange={toggleHoverCard} />
+        </Row>
+        <Row
+          title="背景不透明度"
+          desc="灵动岛胶囊、信息面板与贴边隐藏态的底色深浅；信息面板>胶囊>隐藏态"
+        >
+          <span className="st-slider-val">{islandOpacity}%</span>
+          <input
+            type="range"
+            className="st-slider"
+            min={ISLAND_OPACITY_MIN}
+            max={ISLAND_OPACITY_MAX}
+            step={1}
+            value={islandOpacity}
+            onChange={(e) => changeIslandOpacity(Number(e.target.value))}
+            aria-label="背景不透明度"
+          />
         </Row>
       </Section>
 
