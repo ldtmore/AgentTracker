@@ -313,7 +313,14 @@ export default function Panel({
     <div className="panel" ref={panelRef}>
       <SummaryBar snap={snap} />
       <div className="panel-title">
-        会话 · {snap.sessions.length}
+        {/* 活跃数/总数：活跃区卡片数与历史区「已结束 N 个」之和恰为总数，悬浮对账 */}
+        <Tip
+          content={`进行中 ${active.length} 个 · 共 ${snap.sessions.length} 个（含已结束 ${history.length} 个）`}
+        >
+          <span>
+            会话 · {active.length} / {snap.sessions.length}
+          </span>
+        </Tip>
         <span className="panel-hint">点击卡片跳转对应窗口</span>
       </div>
       <div className="panel-sessions" ref={sessionsRef}>
