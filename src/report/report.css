@@ -1,4 +1,5 @@
-/* 报表页样式（常规窗口；M1-4 起色板走 App.css 的主题变量，支持深浅双主题，与设置页同族） */
+/* 报表页样式（M1-R1 重构：汇总卡＋筛选联动＋维度条＋会话表；常规窗口， */
+/* 色板走 App.css 的主题变量，支持深浅双主题，与设置页同族） */
 
 .rp-root {
   box-sizing: border-box;
@@ -38,11 +39,45 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 10px;
 }
 
 .rp-title {
   font-size: 16px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+/* 页头右侧：导出提示 + 导出按钮 + 范围档 */
+.rp-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* 导出结果行内提示（成功显示文件名，失败显示原因；不弹窗不打扰）；
+   path 非空时加 link 类：可点击定位文件 */
+.rp-export-tip {
+  font-size: 11px;
+  color: var(--text-3);
+  max-width: 320px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rp-export-tip.link {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.rp-export-tip.link:hover {
+  text-decoration: underline;
+}
+
+.rp-export {
+  white-space: nowrap;
 }
 
 .rp-ranges {
@@ -61,13 +96,184 @@
   font-family: inherit;
 }
 
-.rp-btn:hover {
+.rp-btn:hover:not(:disabled) {
   background: var(--btn-bg-hover);
+}
+
+.rp-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .rp-btn.active {
   background: #10b981dd;
   border-color: #10b981;
+}
+
+/* ===== 汇总卡行（第一眼总量、强度与效率；8 张一行） ===== */
+
+.rp-cards {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 8px;
+}
+
+.rp-summ {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  min-width: 0;
+}
+
+.rp-summ-label {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-bottom: 4px;
+  white-space: nowrap;
+}
+
+.rp-summ-val {
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 出错数 > 0 时数字标警示色（仅提示不告警，符合不打扰红线） */
+.rp-summ.warn .rp-summ-val {
+  color: var(--danger);
+}
+
+/* ===== 筛选条（维度下拉，与维度条点击双向联动） ===== */
+
+.rp-filter {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ===== 可搜索下拉（筛选条） ===== */
+
+.rp-sel {
+  position: relative;
+  min-width: 150px;
+}
+
+.rp-sel-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text-1);
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.rp-sel-btn.open {
+  border-color: var(--accent);
+}
+
+.rp-sel-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rp-sel-caret {
+  font-size: 10px;
+  color: var(--text-4);
+  flex: none;
+}
+
+/* 浮层：搜索框 + 选项列表（顶部对齐按钮向下弹） */
+.rp-sel-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 100%;
+  width: max-content;
+  max-width: 360px;
+  background: var(--option-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px var(--edge-shadow);
+  z-index: 30;
+  overflow: hidden;
+}
+
+.rp-sel-search {
+  box-sizing: border-box;
+  width: 100%;
+  background: var(--input-bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-1);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+}
+
+.rp-sel-list {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.rp-sel-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rp-sel-list::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 3px;
+}
+
+.rp-sel-opt {
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.rp-sel-opt:hover {
+  background: var(--surface-hover);
+}
+
+.rp-sel-opt.on {
+  color: var(--accent);
+  background: var(--surface-hover);
+}
+
+.rp-sel-none {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-4);
+}
+
+.rp-clear {
+  padding: 5px 10px;
+}
+
+/* ===== 主区：趋势（左）+ 维度面板（右） ===== */
+
+.rp-main {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 12px;
+  align-items: stretch;
 }
 
 .rp-card {
@@ -77,16 +283,194 @@
   padding: 12px 14px 6px;
 }
 
+.rp-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
 .rp-card-title {
   font-size: 12px;
   color: var(--text-3);
   margin-bottom: 6px;
 }
 
-.rp-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+/* 指标切换小按钮组（Token/次数） */
+.rp-metric {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.rp-metric-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.rp-metric-btn + .rp-metric-btn {
+  border-left: 1px solid var(--border);
+}
+
+.rp-metric-btn.on {
+  background: var(--btn-bg-hover);
+  color: var(--text-1);
+}
+
+/* 维度面板：右栏纵向四段，超高内部滚动（不打断整页滚动位置） */
+.rp-dims {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+  max-height: 372px;
+  overflow-y: auto;
+}
+
+.rp-dims::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rp-dims::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 3px;
+}
+
+/* 维度比例条（HTML 自绘，天然可点击、随主题变量走） */
+.rp-dim-title {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 6px;
+}
+
+.rp-dim-row {
+  display: grid;
+  grid-template-columns: minmax(64px, 128px) 1fr 52px;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.rp-dim-row:hover {
+  background: var(--surface-hover);
+}
+
+/* 不可筛选维度（供应商）：普通视觉，不暗示可点击 */
+.rp-dim-row.flat {
+  cursor: default;
+}
+
+.rp-dim-row.flat:hover {
+  background: transparent;
+}
+
+/* 命中当前筛选的条目：描边高亮 */
+.rp-dim-row.on {
+  background: var(--surface-hover);
+  outline: 1px solid var(--accent);
+}
+
+.rp-dim-name {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rp-dim-track {
+  height: 8px;
+  background: var(--track);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.rp-dim-fill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  min-width: 2px; /* 极小占比也留个可见点 */
+}
+
+.rp-dim-val {
+  font-size: 11px;
+  color: var(--text-3);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-dim-empty {
+  font-size: 12px;
+  color: var(--text-4);
+  padding: 4px 0;
+}
+
+.rp-dim-more {
+  font-size: 11px;
+  color: var(--text-4);
+  padding: 2px 6px;
+}
+
+/* ===== 会话明细表 ===== */
+
+.rp-pager {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rp-page-no {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.rp-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 4px;
+}
+
+.rp-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-4);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.rp-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.rp-table td:first-child {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-1);
+}
+
+.rp-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-1);
+}
+
+.rp-table tbody tr:hover {
+  background: var(--surface-hover);
 }
 
 .rp-empty {

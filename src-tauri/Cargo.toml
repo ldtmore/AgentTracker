@@ -31,6 +31,7 @@ sysinfo = "0.39.6"
 window-vibrancy = "0.8.0"
 windows = { version = "0.62.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse"] }
 tauri-plugin-autostart = "2.5.1"
+tauri-plugin-dialog = "2.7.3"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

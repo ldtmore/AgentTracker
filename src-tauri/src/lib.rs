@@ -236,15 +236,16 @@ fn open_repository() -> Result<(), String> {
     }
 }
 
-// ===== 报表 commands（M1-1） =====
+// ===== 报表 commands（M1-R1：整页快照 + 会话分页） =====
 // 报表聚合是重查询（审查 2.2.1：Tauri 同步 command 在主线程执行，"全部"范围
 // 大数据量时会冻结包括岛在内的全部窗口）——统一走 spawn_blocking 挪到线程池
 
-/// 报表查询公共壳：State 不能跨线程移动，先克隆 Arc 再进阻塞线程池
+/// 报表查询公共壳：State 不能跨线程移动，先克隆 Arc 再进阻塞线程池。
+/// 内层 Result 展平（查询失败与任务失败统一走 Err 通道）
 async fn run_report<T>(
     store: tauri::State<'_, Arc<Store>>,
-    query: impl FnOnce(&Store) -> Vec<T> + Send + 'static,
-) -> Result<Vec<T>, String>
+    query: impl FnOnce(&Store) -> Result<T, String> + Send + 'static,
+) -> Result<T, String>
 where
     T: Send + 'static,
 {
@@ -254,43 +255,86 @@ where
         .map_err(|e| {
             log::warn!("[报表] 查询任务失败：{e}");
             format!("报表查询任务失败：{e}")
-        })
+        })?
 }
 
-/// 报表：按日聚合用量（days<=0 表示全部历史，下同）
+/// 报表：整页快照（范围档＋维度筛选一次返回全部图数据，图间口径一致）。
+/// 范围档白名单见 store：today｜7d｜30d｜90d｜all
 #[tauri::command]
-async fn report_daily(
-    days: i64,
+async fn report_snapshot(
+    range: String,
+    agent: Option<String>,
+    project: Option<String>,
+    model: Option<String>,
     store: tauri::State<'_, Arc<Store>>,
-) -> Result<Vec<store::DayUsage>, String> {
-    run_report(store, move |s| s.report_daily(days)).await
+) -> Result<store::ReportSnapshot, String> {
+    run_report(store, move |s| {
+        s.report_snapshot(&range, agent.as_deref(), project.as_deref(), model.as_deref())
+            .ok_or_else(|| format!("未知范围档：{range}"))
+    })
+    .await
 }
 
-/// 报表：按模型聚合
+/// 报表：会话明细分页（翻页只拉本表，不重刷整页快照）
 #[tauri::command]
-async fn report_by_model(
-    days: i64,
+async fn report_sessions(
+    range: String,
+    agent: Option<String>,
+    project: Option<String>,
+    model: Option<String>,
+    offset: i64,
     store: tauri::State<'_, Arc<Store>>,
-) -> Result<Vec<store::SliceUsage>, String> {
-    run_report(store, move |s| s.report_by_model(days)).await
+) -> Result<store::SessionPage, String> {
+    run_report(store, move |s| {
+        s.report_sessions(&range, agent.as_deref(), project.as_deref(), model.as_deref(), offset)
+            .ok_or_else(|| format!("未知范围档：{range}"))
+    })
+    .await
 }
 
-/// 报表：按供应商聚合
+/// 报表：导出当前范围＋筛选的会话明细 CSV（R2 对账场景）。
+/// 目标路径由前端保存对话框（tauri-plugin-dialog save）让用户自选，
+/// 这里只负责生成内容并写入；后缀校验防误传任意路径
 #[tauri::command]
-async fn report_by_provider(
-    days: i64,
+async fn export_report_csv(
+    range: String,
+    agent: Option<String>,
+    project: Option<String>,
+    model: Option<String>,
+    path: String,
     store: tauri::State<'_, Arc<Store>>,
-) -> Result<Vec<store::SliceUsage>, String> {
-    run_report(store, move |s| s.report_by_provider(days)).await
+) -> Result<String, String> {
+    run_report(store, move |s| {
+        if !path.to_ascii_lowercase().ends_with(".csv") {
+            return Err("导出路径必须以 .csv 结尾".into());
+        }
+        let csv = s
+            .build_report_csv(&range, agent.as_deref(), project.as_deref(), model.as_deref())
+            .ok_or_else(|| format!("未知范围档：{range}"))?;
+        std::fs::write(&path, csv.as_bytes()).map_err(|e| format!("CSV 写入失败：{e}"))?;
+        log::info!("[报表] 已导出 CSV：{}（{} 字节）", path, csv.len());
+        Ok(path.clone())
+    })
+    .await
 }
 
-/// 报表：星期×小时热力图
+/// 打开导出文件所在目录并选中该文件（导出提示文字的点击动作）。
+/// 校验：文件必须真实存在且为 CSV——提示文字可能残留旧会话的路径，
+/// 不允许拿它当任意 explorer 定位入口
 #[tauri::command]
-async fn report_heatmap(
-    days: i64,
-    store: tauri::State<'_, Arc<Store>>,
-) -> Result<Vec<store::HeatCell>, String> {
-    run_report(store, move |s| s.report_heatmap(days)).await
+fn open_file_location(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.is_file() || p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() != Some("csv") {
+        return Err("文件不存在或不是 CSV".into());
+    }
+    // explorer /select,<路径>：打开资源管理器并定位选中；单参数拼接保证含空格路径不被拆散
+    match std::process::Command::new("explorer").arg(format!("/select,{path}")).spawn() {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            log::warn!("[报表] 打开导出目录失败（{path}）：{e}");
+            Err(format!("打开目录失败：{e}"))
+        }
+    }
 }
 
 /// 显示并聚焦报表窗口（2026-09-18 展示改造：岛面板汇总条的"报表"入口，
@@ -660,6 +704,8 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // 保存对话框（报表 CSV 导出让用户自选目录；权限仅 dialog:allow-save）
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             focus_session,
             get_settings,
@@ -670,10 +716,10 @@ pub fn run() {
             autostart_get,
             autostart_set,
             open_repository,
-            report_daily,
-            report_by_model,
-            report_by_provider,
-            report_heatmap,
+            report_snapshot,
+            report_sessions,
+            export_report_csv,
+            open_file_location,
             show_report_window,
             island_peek,
             island_refresh,

@@ -470,107 +470,297 @@ impl Store {
     }
 }
 
-// ===== 报表聚合查询（M1-1） =====
+// ===== 报表聚合查询（M1-R1 重构：范围档＋维度筛选＋整页快照） =====
+// 设计：单一 report_snapshot 一次返回整页数据（各图口径不会瞬间不一致）；
+// 会话明细独立分页命令翻页。所有过滤值参数化绑定，维度/粒度表达式只出自
+// 内部白名单 match（沿用审查 3.3"结构上不可能注入"的原则）。
+// 查询统一 LEFT JOIN sessions（取项目维度，idx_usage_session 索引覆盖）
 
-/// 按日聚合用量（日界取本机时区，由 SQLite 'localtime' 修饰符读 OS 时区）
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DayUsage {
-    pub day: String, // "2026-09-17"
-    pub input: i64,
-    pub output: i64,
-    pub cache_read: i64,
-    pub cache_creation: i64,
-}
+/// 四项用量合计表达式（账单口径，与岛面板/官方账单同口径）
+const TOTAL_EXPR: &str = "COALESCE(u.input_tokens,0)+COALESCE(u.output_tokens,0)+COALESCE(u.cache_read_tokens,0)+COALESCE(u.cache_creation_tokens,0)";
 
-/// 按单一维度（模型/供应商）聚合的 token 总量（四项全口径）
+/// 单维度分组行（Agent/项目/模型/供应商共用）：token 总量 + 调用次数
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SliceUsage {
     pub label: String,
     pub total: i64,
+    pub calls: i64,
 }
 
-/// 热力图单元：星期×小时的 token 总量
+/// 汇总卡指标（当前范围＋筛选下的全量口径）。
+/// R2 扩展：duration/ttft 为 Option——转录无时长字段的 Agent（Claude Code）
+/// 全 NULL 时 SUM/AVG 得 None，前端显示 —（降级而非误报 0）
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct SummaryStats {
+    pub total_tokens: i64,
+    pub calls: i64,
+    pub sessions: i64,
+    pub projects: i64,
+    pub errors: i64,
+    /// 模型生成时长合计（毫秒）
+    pub duration_ms: Option<i64>,
+    /// 平均首字延迟 TTFT（毫秒）
+    pub ttft_avg_ms: Option<i64>,
+    /// 思考 token 合计（思考占比分子）
+    pub reasoning_tokens: i64,
+    /// 输入+输出合计（思考占比分母；缓存读写不计入，口径见报表页脚注）
+    pub billable_tokens: i64,
+}
+
+/// 趋势行：时间桶 + 四项用量 + 调用次数 + 生成时长（前端切换指标不再回查）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrendRow {
+    pub bucket: String,
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
+    pub calls: i64,
+    /// 该桶生成时长合计（毫秒）；无时长数据为 None
+    pub duration_ms: Option<i64>,
+}
+
+/// 热力图单元：星期×小时，token 与次数双指标（前端切换）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HeatCell {
     pub weekday: i32, // 0=周日 … 6=周六（SQLite strftime %w）
     pub hour: i32,    // 0–23
     pub total: i64,
+    pub calls: i64,
 }
 
-/// 报表时间范围起点（days<=0 表示全部历史；否则 days 天前的毫秒时间戳）
-fn range_cutoff(days: i64) -> i64 {
-    if days <= 0 {
-        return 0;
-    }
+/// 会话明细行（报表下钻终点：当前范围内逐会话聚合）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionRow {
+    pub session_id: String,
+    pub agent: String,
+    pub project_dir: Option<String>,
+    pub title: Option<String>,
+    pub first_ts: i64,
+    pub last_ts: i64,
+    pub calls: i64,
+    pub total_tokens: i64,
+    /// 模型生成时长合计（毫秒）；转录无时长字段的 Agent（Claude Code）为 None
+    pub duration_ms: Option<i64>,
+}
+
+/// 会话明细分页结果（page_size 随行下发，前端页数计算免双源常量）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionPage {
+    pub total: i64,
+    pub page_size: i64,
+    pub rows: Vec<SessionRow>,
+}
+
+/// 筛选下拉选项（只受范围影响、不受其他筛选影响——保证任意组合都能选中）
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct FilterOptions {
+    pub agents: Vec<String>,
+    /// 项目目录全路径列表；空串表示"未知项目"（project_dir 缺失的会话）
+    pub projects: Vec<String>,
+    pub models: Vec<String>,
+}
+
+/// 整页报表快照（单命令返回，图与图之间口径一致）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReportSnapshot {
+    pub summary: SummaryStats,
+    pub trend: Vec<TrendRow>,
+    pub by_agent: Vec<SliceUsage>,
+    pub by_project: Vec<SliceUsage>,
+    pub by_model: Vec<SliceUsage>,
+    pub by_provider: Vec<SliceUsage>,
+    /// 错误类型分布（仅 error_type 非空的记录；限流/取消/网络等）
+    pub by_error: Vec<SliceUsage>,
+    pub heatmap: Vec<HeatCell>,
+    pub options: FilterOptions,
+}
+
+/// 会话表每页行数（Rust 侧权威值，随 SessionPage 下发给前端）
+const REPORT_PAGE_SIZE: i64 = 8;
+
+/// 报表筛选上下文：范围起点 + 三个维度过滤（None=不过滤；项目空串=未知项目）
+struct ReportFilter {
+    cutoff_ms: i64,
+    agent: Option<String>,
+    project: Option<String>,
+    model: Option<String>,
+}
+
+/// 当前 Unix 毫秒
+fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64 - days * 86_400_000)
+        .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
 
+/// 本机今日零点（毫秒）：交给 SQLite 按本机时区计算（'localtime' 读 OS 时区），
+/// 与按日聚合口径同源，避免 Rust 侧手写时区/夏令时换算。
+/// 末尾 'utc' 必不可少：把"本地零点"字符串按本地时区转回 UTC 再取 epoch
+/// （缺了会把本地字面时间当 UTC，偏移一个时区差）
+fn today_start_ms(conn: &Connection) -> Option<i64> {
+    conn.query_row(
+        "SELECT CAST(strftime('%s','now','localtime','start of day','utc') AS INTEGER)*1000",
+        [],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// 范围档白名单解析 + cutoff 计算。
+/// 档位固定五种：today（今日零点）｜7d/30d/90d（滚动窗口）｜all（全部历史）；
+/// 白名单外的值返回 None（命令层向前端报错，防任意参数透传）
+fn build_filter(
+    conn: &Connection,
+    range: &str,
+    agent: Option<&str>,
+    project: Option<&str>,
+    model: Option<&str>,
+) -> Option<ReportFilter> {
+    let cutoff_ms = match range {
+        "today" => today_start_ms(conn)?,
+        "all" => 0,
+        "7d" | "30d" | "90d" => {
+            let d: i64 = range.trim_end_matches('d').parse().ok()?;
+            now_ms() - d * 86_400_000
+        }
+        _ => return None,
+    };
+    Some(ReportFilter {
+        cutoff_ms,
+        agent: agent.map(String::from),
+        project: project.map(String::from),
+        model: model.map(String::from),
+    })
+}
+
+/// 趋势时间桶表达式（粒度随范围自动派生，业界分析工具标准做法）：
+/// today→小时（看当天节奏）｜7d/30d→日｜90d→周（30 根日柱太密）｜all→月
+fn bucket_expr(range: &str) -> &'static str {
+    match range {
+        "today" => "strftime('%Y-%m-%d %H:00', u.ts/1000,'unixepoch','localtime')",
+        "7d" | "30d" => "date(u.ts/1000,'unixepoch','localtime')",
+        "90d" => "date(u.ts/1000,'unixepoch','localtime','-6 days','weekday 1')",
+        _ => "strftime('%Y-%m', u.ts/1000,'unixepoch','localtime')",
+    }
+}
+
+/// 维度分组表达式（白名单 match，空串=未知项目与下拉"全部"（null）区分）
+fn dim_expr(dim: &str) -> &'static str {
+    match dim {
+        "agent" => "u.agent",
+        "project" => "COALESCE(s.project_dir,'')",
+        "model" => "LOWER(u.model)",
+        _ => "COALESCE(u.provider,'unknown')",
+    }
+}
+
+/// 公共 WHERE 片段与参数（调用方 FROM 统一为
+/// usage_records u LEFT JOIN sessions s ON s.id=u.session_id）
+fn filter_where(f: &ReportFilter) -> (String, Vec<rusqlite::types::Value>) {
+    let mut sql = String::new();
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
+    sql.push_str(" WHERE u.ts >= ?");
+    params.push(f.cutoff_ms.into());
+    if let Some(a) = &f.agent {
+        sql.push_str(" AND u.agent = ?");
+        params.push(a.clone().into());
+    }
+    if let Some(p) = &f.project {
+        if p.is_empty() {
+            // 空串=未知项目：匹配 project_dir 缺失（NULL 或空）的会话
+            sql.push_str(" AND COALESCE(s.project_dir,'') = ''");
+        } else {
+            sql.push_str(" AND s.project_dir = ?");
+            params.push(p.clone().into());
+        }
+    }
+    if let Some(m) = &f.model {
+        sql.push_str(" AND LOWER(u.model) = LOWER(?)");
+        params.push(m.clone().into());
+    }
+    (sql, params)
+}
+
 impl Store {
-    /// 报表：按日聚合，四项用量分列（趋势图堆叠用）
-    pub fn report_daily(&self, days: i64) -> Vec<DayUsage> {
+    /// 构建报表筛选上下文（范围白名单外的档位返回 None）
+    fn report_filter(
+        &self,
+        range: &str,
+        agent: Option<&str>,
+        project: Option<&str>,
+        model: Option<&str>,
+    ) -> Option<ReportFilter> {
         let conn = self.lock_conn();
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT date(ts/1000,'unixepoch','localtime') AS d,
-                    SUM(COALESCE(input_tokens,0)), SUM(COALESCE(output_tokens,0)),
-                    SUM(COALESCE(cache_read_tokens,0)), SUM(COALESCE(cache_creation_tokens,0))
-             FROM usage_records WHERE ts >= ?1 GROUP BY d ORDER BY d",
-        ) else {
-            return vec![];
+        build_filter(&conn, range, agent, project, model)
+    }
+
+    /// 汇总卡：总量/次数/会话数/活跃项目数/错误次数 + 时长/TTFT/思考占比原料
+    fn report_summary(&self, f: &ReportFilter) -> SummaryStats {
+        let conn = self.lock_conn();
+        let (where_sql, params) = filter_where(f);
+        let sql = format!(
+            "SELECT COALESCE(SUM({TOTAL_EXPR}),0), COUNT(*),
+                    COUNT(DISTINCT u.session_id),
+                    COUNT(DISTINCT COALESCE(s.project_dir,'')),
+                    COALESCE(SUM(u.error_type IS NOT NULL),0),
+                    SUM(u.duration_ms),
+                    CAST(AVG(u.ttft_ms) AS INTEGER),
+                    COALESCE(SUM(COALESCE(u.reasoning_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(u.input_tokens,0)+COALESCE(u.output_tokens,0)),0)
+             FROM usage_records u LEFT JOIN sessions s ON s.id = u.session_id{where_sql}"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return SummaryStats::default();
         };
-        let rows = stmt.query_map([range_cutoff(days)], |r| {
-            Ok(DayUsage {
-                day: r.get(0)?,
-                input: r.get(1)?,
-                output: r.get(2)?,
-                cache_read: r.get(3)?,
-                cache_creation: r.get(4)?,
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            Ok(SummaryStats {
+                total_tokens: r.get(0)?,
+                calls: r.get(1)?,
+                sessions: r.get(2)?,
+                projects: r.get(3)?,
+                errors: r.get(4)?,
+                duration_ms: r.get(5)?,
+                ttft_avg_ms: r.get(6)?,
+                reasoning_tokens: r.get(7)?,
+                billable_tokens: r.get(8)?,
             })
         });
         match rows {
-            Ok(it) => it.filter_map(|x| x.ok()).collect(),
-            Err(_) => vec![],
+            Ok(mut it) => it.next().unwrap_or(Ok(SummaryStats::default())).unwrap_or_default(),
+            Err(_) => SummaryStats::default(),
         }
     }
 
-    /// 报表：按模型聚合占比
-    pub fn report_by_model(&self, days: i64) -> Vec<SliceUsage> {
-        self.report_slice(days, "model")
-    }
-
-    /// 报表：按供应商聚合占比（provider 为 NULL 计入 'unknown'）
-    pub fn report_by_provider(&self, days: i64) -> Vec<SliceUsage> {
-        self.report_slice(days, "provider")
-    }
-
-    /// 报表：按维度聚合内部实现（审查 3.3：两份静态 SQL 取代 format! 拼列名，
-    /// 从"约定只传内部常量"升级为"结构上不可能注入"）
-    /// 模型名按小写归一（本机历史数据存在 GLM-5.3/glm-5.3 大小写混用，避免切成两块）
-    fn report_slice(&self, days: i64, label_expr: &str) -> Vec<SliceUsage> {
-        let group_expr = match label_expr {
-            "model" => "LOWER(model)",
-            "provider" => "COALESCE(provider,'unknown')",
-            other => {
-                log::warn!("report_slice 收到未知维度 {other}，拒绝执行");
-                return vec![];
-            }
-        };
+    /// 趋势：按范围派生粒度分桶，四项用量 + 次数 + 生成时长
+    fn report_trend(&self, f: &ReportFilter, range: &str) -> Vec<TrendRow> {
         let conn = self.lock_conn();
+        let bucket = bucket_expr(range);
+        let (where_sql, params) = filter_where(f);
         let sql = format!(
-            "SELECT {group_expr} AS label,
-                    SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
-                       +COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0)) AS total
-             FROM usage_records WHERE ts >= ?1 GROUP BY label ORDER BY total DESC"
+            "SELECT {bucket} AS b,
+                    COALESCE(SUM(COALESCE(u.input_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(u.output_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(u.cache_read_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(u.cache_creation_tokens,0)),0),
+                    COUNT(*),
+                    SUM(u.duration_ms)
+             FROM usage_records u LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
+             GROUP BY b ORDER BY b"
         );
         let Ok(mut stmt) = conn.prepare(&sql) else {
             return vec![];
         };
-        let rows = stmt.query_map([range_cutoff(days)], |r| {
-            Ok(SliceUsage {
-                label: r.get(0)?,
-                total: r.get(1)?,
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            Ok(TrendRow {
+                bucket: r.get(0)?,
+                input: r.get(1)?,
+                output: r.get(2)?,
+                cache_read: r.get(3)?,
+                cache_creation: r.get(4)?,
+                calls: r.get(5)?,
+                duration_ms: r.get(6)?,
             })
         });
         match rows {
@@ -579,29 +769,262 @@ impl Store {
         }
     }
 
-    /// 报表：星期×小时用量热力图（本机时区）
-    pub fn report_heatmap(&self, days: i64) -> Vec<HeatCell> {
+    /// 维度分组（Agent/项目/模型/供应商，dim 白名单见 dim_expr）
+    fn report_by_dim(&self, f: &ReportFilter, dim: &str) -> Vec<SliceUsage> {
         let conn = self.lock_conn();
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT CAST(strftime('%w', ts/1000,'unixepoch','localtime') AS INTEGER),
-                    CAST(strftime('%H', ts/1000,'unixepoch','localtime') AS INTEGER),
-                    SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
-                       +COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0))
-             FROM usage_records WHERE ts >= ?1 GROUP BY 1,2",
-        ) else {
+        let group = dim_expr(dim);
+        let (where_sql, params) = filter_where(f);
+        let sql = format!(
+            "SELECT {group} AS label, COALESCE(SUM({TOTAL_EXPR}),0), COUNT(*)
+             FROM usage_records u LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
+             GROUP BY label ORDER BY 2 DESC"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
             return vec![];
         };
-        let rows = stmt.query_map([range_cutoff(days)], |r| {
-            Ok(HeatCell {
-                weekday: r.get(0)?,
-                hour: r.get(1)?,
-                total: r.get(2)?,
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            Ok(SliceUsage {
+                label: r.get(0)?,
+                total: r.get(1)?,
+                calls: r.get(2)?,
             })
         });
         match rows {
             Ok(it) => it.filter_map(|x| x.ok()).collect(),
             Err(_) => vec![],
         }
+    }
+
+    /// 周×小时热力图（本机时区，token 与次数双指标）
+    fn report_heatmap(&self, f: &ReportFilter) -> Vec<HeatCell> {
+        let conn = self.lock_conn();
+        let (where_sql, params) = filter_where(f);
+        let sql = format!(
+            "SELECT CAST(strftime('%w', u.ts/1000,'unixepoch','localtime') AS INTEGER),
+                    CAST(strftime('%H', u.ts/1000,'unixepoch','localtime') AS INTEGER),
+                    COALESCE(SUM({TOTAL_EXPR}),0), COUNT(*)
+             FROM usage_records u LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
+             GROUP BY 1,2"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return vec![];
+        };
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            Ok(HeatCell {
+                weekday: r.get(0)?,
+                hour: r.get(1)?,
+                total: r.get(2)?,
+                calls: r.get(3)?,
+            })
+        });
+        match rows {
+            Ok(it) => it.filter_map(|x| x.ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    /// 筛选下拉选项（仅按范围过滤，维度互不遮蔽）
+    fn report_options(&self, f: &ReportFilter) -> FilterOptions {
+        let conn = self.lock_conn();
+        let mut out = FilterOptions::default();
+        let lists: [(&str, &str); 3] = [
+            ("agent", "SELECT DISTINCT u.agent FROM usage_records u WHERE u.ts >= ? ORDER BY 1"),
+            ("project", "SELECT DISTINCT COALESCE(s.project_dir,'') FROM usage_records u
+                         LEFT JOIN sessions s ON s.id = u.session_id WHERE u.ts >= ? ORDER BY 1"),
+            ("model", "SELECT DISTINCT LOWER(u.model) FROM usage_records u WHERE u.ts >= ? ORDER BY 1"),
+        ];
+        for (key, sql) in lists {
+            let Ok(mut stmt) = conn.prepare(sql) else {
+                continue;
+            };
+            let rows = stmt.query_map([f.cutoff_ms], |r| r.get::<_, String>(0));
+            if let Ok(it) = rows {
+                let vals: Vec<String> = it.filter_map(|x| x.ok()).collect();
+                match key {
+                    "agent" => out.agents = vals,
+                    "project" => out.projects = vals,
+                    _ => out.models = vals,
+                }
+            }
+        }
+        out
+    }
+
+    /// 错误类型分布（限流/取消/网络等；仅统计 error_type 非空的记录）
+    fn report_by_error(&self, f: &ReportFilter) -> Vec<SliceUsage> {
+        let conn = self.lock_conn();
+        let (where_sql, params) = filter_where(f);
+        let sql = format!(
+            "SELECT u.error_type AS label, COUNT(*)
+             FROM usage_records u LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
+               AND u.error_type IS NOT NULL
+             GROUP BY label ORDER BY 2 DESC"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return vec![];
+        };
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            Ok(SliceUsage {
+                label: r.get(0)?,
+                total: r.get(1)?,
+                calls: r.get(1)?,
+            })
+        });
+        match rows {
+            Ok(it) => it.filter_map(|x| x.ok()).collect(),
+            Err(_) => vec![],
+        }
+    }
+
+    /// 整页报表快照（一次调用返回全部图数据）
+    pub fn report_snapshot(
+        &self,
+        range: &str,
+        agent: Option<&str>,
+        project: Option<&str>,
+        model: Option<&str>,
+    ) -> Option<ReportSnapshot> {
+        let f = self.report_filter(range, agent, project, model)?;
+        Some(ReportSnapshot {
+            summary: self.report_summary(&f),
+            trend: self.report_trend(&f, range),
+            by_agent: self.report_by_dim(&f, "agent"),
+            by_project: self.report_by_dim(&f, "project"),
+            by_model: self.report_by_dim(&f, "model"),
+            by_provider: self.report_by_dim(&f, "provider"),
+            by_error: self.report_by_error(&f),
+            heatmap: self.report_heatmap(&f),
+            options: self.report_options(&f),
+        })
+    }
+
+    /// 会话明细分页（按总 token 降序；offset 偏移，页大小固定 REPORT_PAGE_SIZE）
+    pub fn report_sessions(
+        &self,
+        range: &str,
+        agent: Option<&str>,
+        project: Option<&str>,
+        model: Option<&str>,
+        offset: i64,
+    ) -> Option<SessionPage> {
+        let f = self.report_filter(range, agent, project, model)?;
+        let conn = self.lock_conn();
+        let (where_sql, params) = filter_where(&f);
+        // 总会话数（独立子查询计数，与行查询同口径）
+        let count_sql = format!(
+            "SELECT COUNT(*) FROM (SELECT u.session_id FROM usage_records u
+             LEFT JOIN sessions s ON s.id = u.session_id{where_sql} GROUP BY u.session_id)"
+        );
+        let total: i64 = conn
+            .prepare(&count_sql)
+            .and_then(|mut s| s.query_row(rusqlite::params_from_iter(params.iter()), |r| r.get(0)))
+            .unwrap_or(0);
+        // 行查询：LIMIT 参数追加在过滤参数之后
+        let mut all_params = params;
+        all_params.push(REPORT_PAGE_SIZE.into());
+        all_params.push(offset.into());
+        let rows_sql = format!(
+            "SELECT u.session_id, COALESCE(s.agent, u.agent), s.project_dir, s.title,
+                    MIN(u.ts), MAX(u.ts), COUNT(*),
+                    COALESCE(SUM({TOTAL_EXPR}),0), SUM(u.duration_ms)
+             FROM usage_records u LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
+             GROUP BY u.session_id ORDER BY 8 DESC LIMIT ? OFFSET ?"
+        );
+        let mut rows = Vec::new();
+        if let Ok(mut stmt) = conn.prepare(&rows_sql) {
+            let mapped = stmt.query_map(rusqlite::params_from_iter(all_params.iter()), |r| {
+                Ok(SessionRow {
+                    session_id: r.get(0)?,
+                    agent: r.get(1)?,
+                    project_dir: r.get(2)?,
+                    title: r.get(3)?,
+                    first_ts: r.get(4)?,
+                    last_ts: r.get(5)?,
+                    calls: r.get(6)?,
+                    total_tokens: r.get(7)?,
+                    duration_ms: r.get(8)?,
+                })
+            });
+            if let Ok(it) = mapped {
+                rows = it.filter_map(|x| x.ok()).collect();
+            }
+        }
+        Some(SessionPage {
+            total,
+            page_size: REPORT_PAGE_SIZE,
+            rows,
+        })
+    }
+
+    /// 按当前范围＋筛选导出会话明细 CSV（R2：对账场景，竞品标配）。
+    /// 纯函数只产字符串，写文件/落路径由命令层负责（可单测）；
+    /// 带 UTF-8 BOM——Excel 直接打开中文表头不乱码；
+    /// 时间列由 SQLite 按本机时区格式化（与页面口径同源）
+    pub fn build_report_csv(
+        &self,
+        range: &str,
+        agent: Option<&str>,
+        project: Option<&str>,
+        model: Option<&str>,
+    ) -> Option<String> {
+        let f = self.report_filter(range, agent, project, model)?;
+        let conn = self.lock_conn();
+        let (where_sql, params) = filter_where(&f);
+        let sql = format!(
+            "SELECT u.session_id, COALESCE(s.agent, u.agent),
+                    COALESCE(s.project_dir,''), COALESCE(s.title,''),
+                    datetime(MIN(u.ts)/1000,'unixepoch','localtime'),
+                    datetime(MAX(u.ts)/1000,'unixepoch','localtime'),
+                    COUNT(*),
+                    COALESCE(SUM(COALESCE(u.input_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(u.output_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(u.cache_read_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(u.cache_creation_tokens,0)),0),
+                    COALESCE(SUM({TOTAL_EXPR}),0),
+                    COALESCE(SUM(u.duration_ms),0),
+                    COALESCE(SUM(u.error_type IS NOT NULL),0)
+             FROM usage_records u LEFT JOIN sessions s ON s.id = u.session_id{where_sql}
+             GROUP BY u.session_id ORDER BY 12 DESC"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            return Some(String::new());
+        };
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |r| {
+            // 文本列当场转义，数字列直接转字符串（无逗号/引号无需转义）
+            Ok(vec![
+                csv_cell(&r.get::<_, String>(0)?),
+                csv_cell(&r.get::<_, String>(1)?),
+                csv_cell(&r.get::<_, String>(2)?),
+                csv_cell(&r.get::<_, String>(3)?),
+                csv_cell(&r.get::<_, String>(4)?),
+                csv_cell(&r.get::<_, String>(5)?),
+                r.get::<_, i64>(6)?.to_string(),
+                r.get::<_, i64>(7)?.to_string(),
+                r.get::<_, i64>(8)?.to_string(),
+                r.get::<_, i64>(9)?.to_string(),
+                r.get::<_, i64>(10)?.to_string(),
+                r.get::<_, i64>(11)?.to_string(),
+                r.get::<_, i64>(12)?.to_string(),
+                r.get::<_, i64>(13)?.to_string(),
+            ])
+        });
+        let mut out = String::from("\u{feff}会话ID,Agent,项目,标题,首次调用,最近调用,调用次数,输入,输出,缓存读,缓存写,总Token,生成时长(毫秒),出错次数\r\n");
+        if let Ok(it) = rows {
+            for cells in it.filter_map(|x| x.ok()) {
+                out.push_str(&cells.join(","));
+                out.push_str("\r\n");
+            }
+        }
+        Some(out)
+    }
+}
+
+/// CSV 字段转义：含逗号/引号/换行时双引号包裹并双写内部引号（RFC 4180）
+fn csv_cell(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
     }
 }
 
@@ -713,47 +1136,156 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// 报表聚合：模型/供应商/日/热力图；总量守恒与排序（TZ 无关断言为主）
+    /// 报表快照/分页（M1-R1）：守恒、维度分组、维度过滤、今日档、非法档拒绝。
+    /// 时间用 now 附近样本（today 档必然覆盖；样本时间早于今日零点用 now-3 秒，
+    /// 测试进程毫秒级完成，不会跨过午夜边界）
     #[test]
-    fn test_report_aggregates() {
-        let path = tmp_db("report");
+    fn test_report_snapshot() {
+        let path = tmp_db("report2");
         let store = Store::open(&path).unwrap();
-        let row_sum = 4_200i64; // sample_usage 四项之和（1000+200+3000+0）
-        let r1 = sample_usage(1_000);
-        let mut r2 = sample_usage(2_000);
-        r2.session_id = "zcode:b".into();
-        r2.model = "glm-5.3-flash".into();
-        let r3 = sample_usage(200_000); // 与 r1 同模型不同会话/时间
-        store.insert_usage(&[r1.clone(), r2.clone(), r3]);
+        let row_sum = 4_200i64; // 样本四项之和（1000+200+3000+0）
+        let now = now_ms();
 
-        // 按模型：glm-5.3 两行合计在前（降序），flash 在后
-        let models = store.report_by_model(0);
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0].label, "glm-5.3");
-        assert_eq!(models[0].total, row_sum * 2);
-        assert_eq!(models[1].label, "glm-5.3-flash");
-        assert_eq!(models[1].total, row_sum);
+        // 样本工厂：两 Agent × 两项目 × 两模型，zcode 带时长、CC 无时长、1 条限流错误
+        let mk = |agent: &str, sid: &str, model: &str, proj: &str, ts: i64, dur: Option<i64>, err: Option<&str>| {
+            let full_sid = format!("{agent}:{sid}");
+            store.upsert_session(&full_sid, agent, Some("glm"), Some(model), Some(proj), Some("标题"), ts, "idle", None);
+            UsageRow {
+                session_id: full_sid,
+                agent: agent.into(),
+                model: model.into(),
+                provider: Some("glm".into()),
+                ts,
+                input_tokens: Some(1000),
+                output_tokens: Some(200),
+                reasoning_tokens: Some(50),
+                cache_read_tokens: Some(3000),
+                cache_creation_tokens: Some(0),
+                duration_ms: dur,
+                ttft_ms: Some(900),
+                error_type: err.map(String::from),
+            }
+        };
+        let rows = vec![
+            mk("zcode", "s1", "GLM-5.3", r"F:\projA", now - 1_000, Some(5_000), None),
+            mk("zcode", "s2", "glm-5.3-flash", r"F:\projB", now - 2_000, None, Some("rate_limited")),
+            mk("claude-code", "s1", "claude-sonnet", r"F:\projA", now - 3_000, None, None),
+        ];
+        store.insert_usage(&rows);
 
-        // 按供应商：全部 glm → 单条
-        let providers = store.report_by_provider(0);
-        assert_eq!(providers.len(), 1);
-        assert_eq!(providers[0].label, "glm");
-        assert_eq!(providers[0].total, row_sum * 3);
+        // 全量快照（all 档，按月分桶）
+        let snap = store.report_snapshot("all", None, None, None).unwrap();
+        assert_eq!(snap.summary.total_tokens, row_sum * 3);
+        assert_eq!(snap.summary.calls, 3);
+        assert_eq!(snap.summary.sessions, 3);
+        assert_eq!(snap.summary.projects, 2);
+        assert_eq!(snap.summary.errors, 1);
 
-        // 热力图：总量守恒，cell 落在合法范围
-        let heat = store.report_heatmap(0);
-        assert_eq!(heat.iter().map(|c| c.total).sum::<i64>(), row_sum * 3);
-        assert!(heat.iter().all(|c| (0..=6).contains(&c.weekday) && (0..=23).contains(&c.hour)));
+        // Agent 维度：zcode 2 行在前（降序）；模型名大小写归一无影响（此处 zcode 两条模型不同）
+        assert_eq!(snap.by_agent.len(), 2);
+        assert_eq!(snap.by_agent[0].label, "zcode");
+        assert_eq!(snap.by_agent[0].total, row_sum * 2);
+        assert_eq!(snap.by_agent[0].calls, 2);
 
-        // 按日：日字符串格式、总量守恒
-        let daily = store.report_daily(0);
-        assert!(!daily.is_empty());
-        let sum: i64 = daily
+        // 项目维度：projA 2 行在前
+        assert_eq!(snap.by_project.len(), 2);
+        assert_eq!(snap.by_project[0].label, r"F:\projA");
+        assert_eq!(snap.by_project[0].total, row_sum * 2);
+
+        // 模型维度：三条各一组（glm-5.3 大写样本应归一为小写标签）
+        assert_eq!(snap.by_model.len(), 3);
+        assert!(snap.by_model.iter().all(|m| m.label == m.label.to_lowercase()));
+
+        // 供应商维度：全部 glm 单组
+        assert_eq!(snap.by_provider.len(), 1);
+        assert_eq!(snap.by_provider[0].total, row_sum * 3);
+
+        // 热力图：token 与次数双守恒，坐标合法
+        assert_eq!(snap.heatmap.iter().map(|c| c.total).sum::<i64>(), row_sum * 3);
+        assert_eq!(snap.heatmap.iter().map(|c| c.calls).sum::<i64>(), 3);
+        assert!(snap.heatmap.iter().all(|c| (0..=6).contains(&c.weekday) && (0..=23).contains(&c.hour)));
+
+        // 趋势（all→月桶）：四项与次数守恒
+        let t_sum: (i64, i64) = snap
+            .trend
             .iter()
-            .map(|d| d.input + d.output + d.cache_read + d.cache_creation)
-            .sum();
-        assert_eq!(sum, row_sum * 3);
-        assert!(daily.windows(2).all(|w| w[0].day < w[1].day), "按日升序");
+            .map(|t| (t.input + t.output + t.cache_read + t.cache_creation, t.calls))
+            .fold((0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
+        assert_eq!(t_sum, (row_sum * 3, 3));
+
+        // 下拉选项：只受范围影响
+        assert_eq!(snap.options.agents.len(), 2);
+        assert_eq!(snap.options.projects.len(), 2);
+        assert_eq!(snap.options.models.len(), 3);
+
+        // 维度过滤：agent=zcode → 只剩 2 行
+        let z = store.report_snapshot("all", Some("zcode"), None, None).unwrap();
+        assert_eq!(z.summary.calls, 2);
+        assert_eq!(z.summary.total_tokens, row_sum * 2);
+        // 项目过滤：projA → zcode s1 + CC s1
+        let pa = store.report_snapshot("all", None, Some(r"F:\projA"), None).unwrap();
+        assert_eq!(pa.summary.calls, 2);
+        // 模型过滤（大小写不敏感）
+        let m = store.report_snapshot("all", None, None, Some("GLM-5.3")).unwrap();
+        assert_eq!(m.summary.calls, 1);
+
+        // 今日档：now 样本必然落入（本机时区零点 <= now）
+        let today = store.report_snapshot("today", None, None, None).unwrap();
+        assert_eq!(today.summary.calls, 3);
+        // 近 7 天档同量；非法档拒绝
+        assert_eq!(store.report_snapshot("7d", None, None, None).unwrap().summary.calls, 3);
+        assert!(store.report_snapshot("xyz", None, None, None).is_none());
+
+        // 会话分页：按 token 降序、total/页大小、offset 翻页、时长口径（CC 为 None）
+        let page1 = store.report_sessions("all", None, None, None, 0).unwrap();
+        assert_eq!(page1.total, 3);
+        assert_eq!(page1.page_size, REPORT_PAGE_SIZE);
+        assert_eq!(page1.rows.len(), 3);
+        assert!(page1.rows.windows(2).all(|w| w[0].total_tokens >= w[1].total_tokens));
+        let cc_row = page1.rows.iter().find(|r| r.agent == "claude-code").unwrap();
+        assert_eq!(cc_row.duration_ms, None, "CC 转录无时长字段应为 None");
+        let zc_row = page1.rows.iter().find(|r| r.session_id == "zcode:s1").unwrap();
+        assert_eq!(zc_row.duration_ms, Some(5_000));
+        // 翻页：offset 越界返回空页但 total 不变
+        let page2 = store.report_sessions("all", None, None, None, REPORT_PAGE_SIZE).unwrap();
+        assert_eq!(page2.total, 3);
+        assert!(page2.rows.is_empty());
+        // 过滤联动：agent=zcode → 会话表只剩 2 个
+        let zpage = store.report_sessions("all", Some("zcode"), None, None, 0).unwrap();
+        assert_eq!(zpage.total, 2);
+
+        // R2 汇总扩展：时长合计/平均首字/思考占比原料（样本 ttft 全 900、reasoning 全 50）
+        assert_eq!(snap.summary.duration_ms, Some(5_000));
+        assert_eq!(snap.summary.ttft_avg_ms, Some(900));
+        assert_eq!(snap.summary.reasoning_tokens, 150);
+        assert_eq!(snap.summary.billable_tokens, 1_200 * 3);
+        // R2 趋势行时长：仅 zcode s1 贡献 5000
+        let trend_dur: i64 = snap.trend.iter().filter_map(|t| t.duration_ms).sum();
+        assert_eq!(trend_dur, 5_000);
+        // R2 错误分布：仅 1 条 rate_limited
+        assert_eq!(snap.by_error.len(), 1);
+        assert_eq!(snap.by_error[0].label, "rate_limited");
+        assert_eq!(snap.by_error[0].calls, 1);
+
+        // R2 CSV 导出：BOM 表头 + 3 行会话（首行 token 最大），非法档拒绝
+        let csv = store.build_report_csv("all", None, None, None).unwrap();
+        assert!(csv.starts_with('\u{feff}'));
+        assert_eq!(csv.lines().count(), 4, "表头 + 3 行");
+        assert!(csv.contains("zcode:s1"));
+        assert!(csv.contains("claude-code:s1"));
+        let zc_csv = store.build_report_csv("all", Some("zcode"), None, None).unwrap();
+        assert_eq!(zc_csv.lines().count(), 3, "过滤后 2 行会话");
+        assert!(!zc_csv.contains("claude-code:s1"));
+        assert!(store.build_report_csv("xyz", None, None, None).is_none());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// CSV 字段转义（RFC 4180）：逗号/引号/换行触发包裹，引号双写
+    #[test]
+    fn test_csv_cell() {
+        assert_eq!(csv_cell("普通"), "普通");
+        assert_eq!(csv_cell("a,b"), "\"a,b\"");
+        assert_eq!(csv_cell("说\"引号"), "\"说\"\"引号\"");
+        assert_eq!(csv_cell("换\n行"), "\"换\n行\"");
     }
 }

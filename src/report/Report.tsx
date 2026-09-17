@@ -1,13 +1,16 @@
 /**
- * 报表页（M1-1）：token 用量统计窗口 —— 每日趋势 / 周×小时热力图 / 模型与供应商占比
- * 数据来自本地 SQLite(usage_records)，Rust 侧聚合，前端 ECharts 按需渲染；
- * 时间口径为本机时区（Asia/Shanghai），范围切换重新拉取
+ * 报表页（M1-R1 重构）：多维用量分析 ——
+ * 汇总卡 / 趋势（粒度随范围自动：今日→小时、7~30 天→日、90 天→周、全部→月）/
+ * Agent·项目·模型·供应商维度条（点击联动全局筛选）/ 周×小时热力图 / 会话明细分页。
+ * 数据来自本地 SQLite，Rust 侧单命令整页快照（各图口径一致）；
+ * 时间口径为本机时区；筛选变更全量重拉，翻页仅重拉会话表（本地查询毫秒级）
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 import * as echarts from "echarts/core";
 import type { EChartsCoreOption } from "echarts/core";
-import { BarChart, HeatmapChart, PieChart } from "echarts/charts";
+import { BarChart, HeatmapChart } from "echarts/charts";
 import {
   GridComponent,
   LegendComponent,
@@ -16,7 +19,7 @@ import {
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import Chart from "./Chart";
-import { fmtTokens } from "../shared/types";
+import { fmtTokens, fmtDuration, agentColor, errorReason } from "../shared/types";
 import { useTheme } from "../shared/theme";
 import "./report.css";
 
@@ -24,7 +27,6 @@ import "./report.css";
 echarts.use([
   BarChart,
   HeatmapChart,
-  PieChart,
   GridComponent,
   LegendComponent,
   TooltipComponent,
@@ -32,34 +34,95 @@ echarts.use([
   CanvasRenderer,
 ]);
 
-/** 每日聚合行（对应 Rust store：：DayUsage） */
-interface DayUsage {
-  day: string;
+// ===== 与 Rust store 报表结构对应的类型 =====
+
+/** 汇总卡（范围＋筛选下的全量口径；duration/ttft 为 null 表示该范围无时长数据） */
+interface SummaryStats {
+  total_tokens: number;
+  calls: number;
+  sessions: number;
+  projects: number;
+  errors: number;
+  duration_ms: number | null;
+  ttft_avg_ms: number | null;
+  reasoning_tokens: number;
+  billable_tokens: number;
+}
+
+/** 单维度分组行（token 总量 + 调用次数；错误分布里 total/calls 同为次数） */
+interface SliceUsage {
+  label: string;
+  total: number;
+  calls: number;
+}
+
+/** 趋势行（时间桶 + 四项用量 + 次数 + 生成时长，指标切换免回查） */
+interface TrendRow {
+  bucket: string;
   input: number;
   output: number;
   cache_read: number;
   cache_creation: number;
+  calls: number;
+  duration_ms: number | null;
 }
 
-/** 模型/供应商占比行（对应 store：：SliceUsage） */
-interface SliceUsage {
-  label: string;
-  total: number;
-}
-
-/** 热力图单元（对应 store：：HeatCell） */
+/** 热力图单元（token 与次数双指标） */
 interface HeatCell {
   weekday: number; // 0=周日
   hour: number;
   total: number;
+  calls: number;
 }
 
-/** 时间范围选项（days=0 表示全部历史） */
+/** 会话明细行 */
+interface SessionRow {
+  session_id: string;
+  agent: string;
+  project_dir: string | null;
+  title: string | null;
+  first_ts: number;
+  last_ts: number;
+  calls: number;
+  total_tokens: number;
+  /** 模型生成时长合计；转录无时长字段的 Agent（Claude Code）为 null */
+  duration_ms: number | null;
+}
+
+/** 会话分页结果 */
+interface SessionPage {
+  total: number;
+  page_size: number;
+  rows: SessionRow[];
+}
+
+/** 筛选下拉选项（projects 中空串=未知项目） */
+interface FilterOptions {
+  agents: string[];
+  projects: string[];
+  models: string[];
+}
+
+/** 整页快照 */
+interface ReportSnapshot {
+  summary: SummaryStats;
+  trend: TrendRow[];
+  by_agent: SliceUsage[];
+  by_project: SliceUsage[];
+  by_model: SliceUsage[];
+  by_provider: SliceUsage[];
+  by_error: SliceUsage[];
+  heatmap: HeatCell[];
+  options: FilterOptions;
+}
+
+/** 范围档（与 Rust build_filter 白名单同步） */
 const RANGES = [
-  { label: "近 7 天", days: 7 },
-  { label: "近 30 天", days: 30 },
-  { label: "近 90 天", days: 90 },
-  { label: "全部", days: 0 },
+  { key: "today", label: "今日" },
+  { key: "7d", label: "近 7 天" },
+  { key: "30d", label: "近 30 天" },
+  { key: "90d", label: "近 90 天" },
+  { key: "all", label: "全部" },
 ];
 
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -72,34 +135,262 @@ const STACK = [
   { key: "cache_creation" as const, name: "缓存写", color: "#fbbf24" },
 ];
 
-const PIE_COLORS = ["#34d399", "#60a5fa", "#a78bfa", "#fbbf24", "#f87171", "#38bdf8", "#f472b6"];
+/** 维度条渐变备用色（项目/模型/供应商行，未提供 colorFn 时按序取用） */
+const DIM_COLORS = ["#38bdf8", "#f472b6", "#facc15", "#4ade80", "#fb7185", "#a78bfa", "#60a5fa", "#34d399"];
+
+/** 路径取尾段（F:\repo\projA → projA；显示用，过滤值仍用全路径） */
+const tail = (p: string): string => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+
+/** 趋势桶显示标签：今日→"HH:00"、7/30 天与 90 天→"MM-DD"、全部→"YYYY-MM" */
+function bucketLabel(b: string, range: string): string {
+  if (range === "today") return b.slice(11);
+  if (range === "all") return b;
+  return b.slice(5);
+}
+
+/** 毫秒 → "MM-dd HH:mm"（本机时区） */
+function fmtDT(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** 可搜索下拉（筛选用）：选项多时输入关键字模糊匹配快速定位；
+ *  value 为过滤原值（项目为全路径），label 为显示文本（项目为尾段） */
+function SearchSelect({
+  value,
+  options,
+  allLabel,
+  onChange,
+}: {
+  /** 当前选中值；null=全部 */
+  value: string | null;
+  options: { value: string; label: string }[];
+  allLabel: string;
+  onChange: (v: string | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  // 点击组件外部关闭浮层
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  // 模糊过滤：label 与 value 都参与匹配（项目可按全路径关键字搜）
+  const kw = q.trim().toLowerCase();
+  const filtered = kw
+    ? options.filter(
+        (o) => o.label.toLowerCase().includes(kw) || o.value.toLowerCase().includes(kw),
+      )
+    : options;
+  const current = options.find((o) => o.value === value);
+
+  return (
+    <div className="rp-sel" ref={ref}>
+      <button
+        type="button"
+        className={`rp-sel-btn${open ? " open" : ""}`}
+        onClick={() => {
+          setOpen(!open);
+          setQ(""); // 每次打开重置搜索词
+        }}
+      >
+        <span className="rp-sel-text" title={current?.value ?? allLabel}>
+          {current ? current.label : allLabel}
+        </span>
+        <span className="rp-sel-caret">▾</span>
+      </button>
+      {open && (
+        <div className="rp-sel-pop">
+          <input
+            className="rp-sel-search"
+            autoFocus
+            value={q}
+            placeholder="输入关键字过滤…"
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setOpen(false);
+              if (e.key === "Enter" && filtered.length > 0) {
+                onChange(filtered[0].value);
+                setOpen(false);
+              }
+            }}
+          />
+          <div className="rp-sel-list">
+            <div
+              className={`rp-sel-opt${value == null ? " on" : ""}`}
+              onClick={() => {
+                onChange(null);
+                setOpen(false);
+              }}
+            >
+              {allLabel}
+            </div>
+            {filtered.map((o) => (
+              <div
+                key={o.value}
+                className={`rp-sel-opt${value === o.value ? " on" : ""}`}
+                title={o.value}
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+              >
+                {o.label}
+              </div>
+            ))}
+            {filtered.length === 0 && <div className="rp-sel-none">无匹配项</div>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 指标键（趋势图三档；热力图两档无时长数据） */type MetricKey = "token" | "calls" | "duration";
+
+/** 毫秒 → "900 毫秒"/"1.2 秒"（平均首字延迟用） */
+function fmtMs(ms: number): string {
+  return ms < 1000 ? `${ms} 毫秒` : `${(ms / 1000).toFixed(1)} 秒`;
+}
+
+/** 毫秒 → 短格式 "45s"/"12m"/"1.3h"（趋势图 y 轴用，长格式会挤爆轴标签） */
+function fmtAxisDur(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  return `${(ms / 3_600_000).toFixed(1)}h`;
+}
+
+/** 指标切换小按钮组（Token/次数/时长，按图可配） */
+function MetricToggle({
+  value,
+  onChange,
+  options,
+}: {
+  value: MetricKey;
+  onChange: (v: MetricKey) => void;
+  options: { key: MetricKey; label: string }[];
+}) {
+  return (
+    <div className="rp-metric">
+      {options.map((o) => (
+        <button
+          key={o.key}
+          className={`rp-metric-btn${value === o.key ? " on" : ""}`}
+          onClick={() => onChange(o.key)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 维度比例条（HTML 自绘，点击条目=全局筛选该维度，再点取消；不占 ECharts 实例） */
+function DimBars({
+  title,
+  items,
+  active,
+  onSelect,
+  colorFn,
+  fmt,
+  selectable = true,
+}: {
+  title: string;
+  items: SliceUsage[];
+  /** 当前生效的筛选值（null=未筛选） */
+  active: string | null;
+  onSelect: (v: string | null) => void;
+  /** 行颜色（缺省按序取 DIM_COLORS） */
+  colorFn?: (label: string) => string;
+  /** 标签显示转换（如项目路径→尾段；过滤值仍用原值） */
+  fmt?: (label: string) => string;
+  /** 是否可点击筛选（供应商维度暂无全局筛选，仅展示） */
+  selectable?: boolean;
+}) {
+  const max = Math.max(...items.map((i) => i.total), 1);
+  const shown = items.slice(0, 8);
+  return (
+    <div className="rp-dim">
+      <div className="rp-dim-title">{title}</div>
+      {shown.length === 0 ? (
+        <div className="rp-dim-empty">无数据</div>
+      ) : (
+        shown.map((it, idx) => {
+          const on = selectable && active === it.label;
+          const name = fmt ? fmt(it.label) : it.label;
+          return (
+            <div
+              key={it.label}
+              className={`rp-dim-row${on ? " on" : ""}${selectable ? "" : " flat"}`}
+              title={`${name} · ${fmtTokens(it.total)} token · ${it.calls} 次调用${selectable ? `（点击${on ? "取消" : ""}筛选）` : ""}`}
+              onClick={() => selectable && onSelect(on ? null : it.label)}
+            >
+              <span className="rp-dim-name" title={name}>
+                {name}
+              </span>
+              <span className="rp-dim-track">
+                <span
+                  className="rp-dim-fill"
+                  style={{
+                    width: `${(it.total / max) * 100}%`,
+                    background: colorFn ? colorFn(it.label) : DIM_COLORS[idx % DIM_COLORS.length],
+                  }}
+                />
+              </span>
+              <span className="rp-dim-val">{fmtTokens(it.total)}</span>
+            </div>
+          );
+        })
+      )}
+      {items.length > shown.length && (
+        <div className="rp-dim-more">其余 {items.length - shown.length} 项</div>
+      )}
+    </div>
+  );
+}
 
 export default function Report() {
   const theme = useTheme();
-  const [days, setDays] = useState(30);
-  const [daily, setDaily] = useState<DayUsage[]>([]);
-  const [models, setModels] = useState<SliceUsage[]>([]);
-  const [providers, setProviders] = useState<SliceUsage[]>([]);
-  const [heat, setHeat] = useState<HeatCell[]>([]);
+  // 筛选状态：范围档 + 三维度（null=全部；项目空串=未知项目）
+  const [range, setRange] = useState("30d");
+  const [agent, setAgent] = useState<string | null>(null);
+  const [project, setProject] = useState<string | null>(null);
+  const [model, setModel] = useState<string | null>(null);
+  // 数据：整页快照 + 会话分页
+  const [snap, setSnap] = useState<ReportSnapshot | null>(null);
+  const [sess, setSess] = useState<SessionPage | null>(null);
+  const [sessOffset, setSessOffset] = useState(0);
   const [loaded, setLoaded] = useState(false);
+  // 图表指标切换（数据已多指标下发，切换免回查）
+  const [trendMetric, setTrendMetric] = useState<MetricKey>("token");
+  const [heatMetric, setHeatMetric] = useState<"token" | "calls">("token");
+  // CSV 导出提示：text 为展示文案；path 非空时可点击定位到文件（失败时不可点）
+  const [exportTip, setExportTip] = useState<{ text: string; path: string | null } | null>(null);
 
-  // 范围切换即全量重拉（本地查询，毫秒级）
+  // 筛选变更：整页快照 + 会话表第一页一起重拉（本地毫秒级）
   useEffect(() => {
     let alive = true;
     setLoaded(false);
+    setSessOffset(0);
     (async () => {
       try {
-        const [d, m, p, h] = await Promise.all([
-          invoke<DayUsage[]>("report_daily", { days }),
-          invoke<SliceUsage[]>("report_by_model", { days }),
-          invoke<SliceUsage[]>("report_by_provider", { days }),
-          invoke<HeatCell[]>("report_heatmap", { days }),
+        const [s, page] = await Promise.all([
+          invoke<ReportSnapshot>("report_snapshot", { range, agent, project, model }),
+          invoke<SessionPage>("report_sessions", { range, agent, project, model, offset: 0 }),
         ]);
         if (!alive) return;
-        setDaily(d);
-        setModels(m);
-        setProviders(p);
-        setHeat(h);
+        setSnap(s);
+        setSess(page);
+      } catch {
+        if (alive) setSnap(null); // 查询失败按空态展示（范围档白名单外等异常）
       } finally {
         if (alive) setLoaded(true);
       }
@@ -107,49 +398,143 @@ export default function Report() {
     return () => {
       alive = false;
     };
-  }, [days]);
+  }, [range, agent, project, model]);
 
-  // 图表主题色（M1-4）：轴线/图例文字、网格线、饼图标签随主题切换；
-  // 序列配色（STACK/PIE_COLORS/热力色阶）为高饱和色，双主题通用不再拆分
+  /** 翻页：只重拉会话表，不刷新其它图 */
+  const turnPage = (dir: 1 | -1) => {
+    const size = sess?.page_size ?? 8;
+    const total = sess?.total ?? 0;
+    const pages = Math.max(1, Math.ceil(total / size));
+    const next = Math.min(Math.max(sessOffset + dir * size, 0), (pages - 1) * size);
+    if (next === sessOffset) return;
+    setSessOffset(next);
+    invoke<SessionPage>("report_sessions", { range, agent, project, model, offset: next })
+      .then(setSess)
+      .catch(() => {});
+  };
+
+  /** 导出当前范围＋筛选的会话明细 CSV：先弹系统保存对话框让用户自选
+   *  目录与文件名（取消则不动作），成功后提示文字可点击定位文件 */
+  const doExport = async () => {
+    const d = new Date();
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+    const target = await save({
+      title: "导出用量报表 CSV",
+      defaultPath: `AgentTrackerIsland-用量报表-${stamp}.csv`,
+      filters: [{ name: "CSV 文件", extensions: ["csv"] }],
+    });
+    if (!target) return; // 用户取消
+    setExportTip({ text: "导出中…", path: null });
+    try {
+      await invoke<string>("export_report_csv", { range, agent, project, model, path: target });
+      setExportTip({
+        text: `已导出：${target.split(/[\\/]/).pop()}（点击打开所在目录）`,
+        path: target,
+      });
+    } catch (e) {
+      setExportTip({ text: `导出失败：${e}`, path: null });
+    }
+  };
+
+  /** 点击导出提示：资源管理器定位到导出文件 */
+  const openExportLocation = () => {
+    if (!exportTip?.path) return;
+    invoke("open_file_location", { path: exportTip.path }).catch((e) => {
+      setExportTip({ text: `打开目录失败：${e}`, path: null });
+    });
+  };
+
+  // 图表主题色（M1-4）：轴线/图例文字、网格线随主题切换；
+  // 序列配色（STACK/DIM_COLORS/热力色阶）为高饱和色，双主题通用
   const axisText = { color: theme === "dark" ? "#9ca3af" : "#57606a" };
   const splitLine = theme === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)";
-  const pieLabel = theme === "dark" ? "#d1d5db" : "#424a53";
 
-  // 趋势图：四项用量堆叠柱
-  const trendOption = useMemo<EChartsCoreOption>(
-    () => ({
+  // 趋势图：粒度随范围自动（Rust 侧分桶）；今日档补齐 24 小时（空小时归零，曲线完整）
+  const trendOption = useMemo<EChartsCoreOption>(() => {
+    const t = snap?.trend ?? [];
+    const byBucket = new Map(t.map((r) => [r.bucket, r]));
+    let keys: string[];
+    if (range === "today") {
+      const d = new Date();
+      const p = (n: number) => String(n).padStart(2, "0");
+      const day = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+      keys = Array.from({ length: 24 }, (_, i) => `${day} ${p(i)}:00`);
+    } else {
+      keys = t.map((r) => r.bucket);
+    }
+    const labels = keys.map((k) => bucketLabel(k, range));
+    const grid = { left: 56, right: 16, top: 32, bottom: 24 };
+    const xAxis = { type: "category" as const, data: labels, axisLabel: axisText };
+    const mkYAxis = (fmt: (v: number) => string) => ({
+      type: "value" as const,
+      axisLabel: { ...axisText, formatter: fmt },
+      splitLine: { lineStyle: { color: splitLine } },
+    });
+    // 时长模式：单柱（毫秒），y 轴短格式；无时长数据的桶计 0
+    if (trendMetric === "duration") {
+      return {
+        tooltip: {
+          trigger: "axis",
+          valueFormatter: (v: number) => fmtDuration(v),
+        },
+        grid,
+        xAxis,
+        yAxis: mkYAxis(fmtAxisDur),
+        series: [
+          {
+            name: "生成时长",
+            type: "bar",
+            data: keys.map((k) => byBucket.get(k)?.duration_ms ?? 0),
+            itemStyle: { color: "#fbbf24" },
+            barMaxWidth: 26,
+          },
+        ],
+      };
+    }
+    if (trendMetric === "calls") {
+      return {
+        tooltip: { trigger: "axis" },
+        grid,
+        xAxis,
+        yAxis: mkYAxis((v) => fmtTokens(v)),
+        series: [
+          {
+            name: "调用次数",
+            type: "bar",
+            data: keys.map((k) => byBucket.get(k)?.calls ?? 0),
+            itemStyle: { color: "#38bdf8" },
+            barMaxWidth: 26,
+          },
+        ],
+      };
+    }
+    return {
       tooltip: { trigger: "axis" },
       legend: { data: STACK.map((s) => s.name), textStyle: axisText, top: 0 },
-      grid: { left: 56, right: 16, top: 32, bottom: 24 },
-      xAxis: {
-        type: "category",
-        data: daily.map((d) => d.day.slice(5)),
-        axisLabel: axisText,
-      },
-      yAxis: {
-        type: "value",
-        axisLabel: { ...axisText, formatter: (v: number) => fmtTokens(v) },
-        splitLine: { lineStyle: { color: splitLine } },
-      },
+      grid,
+      xAxis,
+      yAxis: mkYAxis((v) => fmtTokens(v)),
       series: STACK.map((s) => ({
         name: s.name,
         type: "bar",
         stack: "total",
-        data: daily.map((d) => d[s.key]),
+        data: keys.map((k) => byBucket.get(k)?.[s.key] ?? 0),
         itemStyle: { color: s.color },
         barMaxWidth: 26,
       })),
-    }),
-    [daily, theme],
-  );
+    };
+  }, [snap, range, trendMetric, theme]);
 
-  // 热力图：列=小时，行=星期，色阶=token 总量
+  // 热力图：列=小时，行=星期，色阶随指标切换
   const heatOption = useMemo<EChartsCoreOption>(() => {
-    const max = heat.reduce((m, c) => Math.max(m, c.total), 0);
+    const heat = snap?.heatmap ?? [];
+    const val = (c: HeatCell) => (heatMetric === "calls" ? c.calls : c.total);
+    const max = Math.max(1, ...heat.map(val));
     return {
       tooltip: {
         formatter: (p: { data: [number, number, number] }) =>
-          `${WEEKDAYS[p.data[1]]} ${p.data[0]}:00 · ${fmtTokens(p.data[2])}`,
+          `${WEEKDAYS[p.data[1]]} ${p.data[0]}:00 · ${heatMetric === "calls" ? `${p.data[2]} 次` : fmtTokens(p.data[2])}`,
       },
       grid: { left: 44, right: 20, top: 10, bottom: 52 },
       xAxis: {
@@ -161,7 +546,7 @@ export default function Report() {
       yAxis: { type: "category", data: WEEKDAYS, axisLabel: axisText },
       visualMap: {
         min: 0,
-        max: Math.max(max, 1),
+        max,
         calculable: true,
         orient: "horizontal",
         left: "center",
@@ -172,76 +557,268 @@ export default function Report() {
       series: [
         {
           type: "heatmap",
-          data: heat.map((c) => [c.hour, c.weekday, c.total]),
+          data: heat.map((c) => [c.hour, c.weekday, val(c)]),
         },
       ],
     };
-  }, [heat, theme]);
+  }, [snap, heatMetric, theme]);
 
-  // 占比饼图（模型/供应商共用模板）
-  const pieOption = (data: SliceUsage[]): EChartsCoreOption => ({
-    tooltip: {
-      formatter: (p: { name: string; value: number; percent: number }) =>
-        `${p.name} · ${fmtTokens(p.value)}(${p.percent}%)`,
-    },
-    legend: { bottom: 0, textStyle: axisText, type: "scroll" },
-    color: PIE_COLORS,
-    series: [
-      {
-        type: "pie",
-        radius: ["38%", "66%"],
-        center: ["50%", "44%"],
-        data: data.map((d) => ({ name: d.label, value: d.total })),
-        label: { color: pieLabel, formatter: "{d}%" },
-      },
-    ],
-  });
-
-  const empty = loaded && daily.length === 0 && models.length === 0;
+  const summary = snap?.summary;
+  const empty = loaded && (snap == null || (summary != null && summary.calls === 0));
+  const pageSize = sess?.page_size ?? 8;
+  const pageCount = Math.max(1, Math.ceil((sess?.total ?? 0) / pageSize));
+  const pageNo = Math.floor(sessOffset / pageSize) + 1;
+  const hasFilter = agent != null || project != null || model != null;
 
   return (
     <div className="rp-root">
       <div className="rp-header">
         <span className="rp-title">用量报表</span>
-        <div className="rp-ranges">
-          {RANGES.map((r) => (
-            <button
-              key={r.days}
-              className={`rp-btn${days === r.days ? " active" : ""}`}
-              onClick={() => setDays(r.days)}
+        <div className="rp-header-right">
+          {exportTip && (
+            <span
+              className={`rp-export-tip${exportTip.path ? " link" : ""}`}
+              title={exportTip.path ?? exportTip.text}
+              onClick={openExportLocation}
             >
-              {r.label}
-            </button>
-          ))}
+              {exportTip.text}
+            </span>
+          )}
+          <button className="rp-btn rp-export" onClick={doExport}>
+            导出 CSV
+          </button>
+          <div className="rp-ranges">
+            {RANGES.map((r) => (
+              <button
+                key={r.key}
+                className={`rp-btn${range === r.key ? " active" : ""}`}
+                onClick={() => setRange(r.key)}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {empty ? (
-        <div className="rp-empty">所选范围内暂无数据</div>
+        <div className="rp-empty">所选条件下暂无数据</div>
       ) : (
-        <>
-          <section className="rp-card">
-            <div className="rp-card-title">每日 Token 趋势（堆叠：输入/输出/缓存）</div>
-            <Chart option={trendOption} height={280} />
-          </section>
-          <section className="rp-card">
-            <div className="rp-card-title">周 × 小时用量热力图（本机时区）</div>
-            <Chart option={heatOption} height={250} />
-          </section>
-          <div className="rp-grid">
+        snap && (
+          <>
+            {/* 汇总卡行：第一眼看清总量、强度与效率（时长/首字为 null 显示 — 降级） */}
+            {(() => {
+              const s = snap.summary;
+              // 思考占比：思考 /（输入+输出+思考），缓存读写不计入（脚注口径）
+              const denom = s.reasoning_tokens + s.billable_tokens;
+              const cards: { label: string; val: string; warn?: boolean }[] = [
+                { label: "总 Token", val: fmtTokens(s.total_tokens) },
+                { label: "调用次数", val: s.calls.toLocaleString() },
+                { label: "生成时长", val: fmtDuration(s.duration_ms) },
+                { label: "平均首字", val: s.ttft_avg_ms != null ? fmtMs(s.ttft_avg_ms) : "—" },
+                {
+                  label: "思考占比",
+                  // 极小占比四舍五入为 0% 时显示 <1%（真实数据常见 0.3% 一类）
+                  val:
+                    denom > 0
+                      ? (s.reasoning_tokens / denom) * 100 < 1
+                        ? "<1%"
+                        : `${Math.round((s.reasoning_tokens / denom) * 100)}%`
+                      : "—",
+                },
+                { label: "会话数", val: s.sessions.toLocaleString() },
+                { label: "活跃项目", val: s.projects.toLocaleString() },
+                {
+                  label: "出错次数",
+                  val: s.errors.toLocaleString(),
+                  warn: s.errors > 0,
+                },
+              ];
+              return (
+                <div className="rp-cards">
+                  {cards.map((c) => (
+                    <div key={c.label} className={`rp-summ${c.warn ? " warn" : ""}`}>
+                      <div className="rp-summ-label">{c.label}</div>
+                      <div className="rp-summ-val">{c.val}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* 筛选条：可搜索下拉（与维度条点击双向联动） */}
+            <div className="rp-filter">
+              <SearchSelect
+                value={agent}
+                allLabel="全部 Agent"
+                onChange={setAgent}
+                options={snap.options.agents.map((a) => ({ value: a, label: a }))}
+              />
+              <SearchSelect
+                value={project}
+                allLabel="全部项目"
+                onChange={setProject}
+                options={snap.options.projects.map((p) => ({
+                  value: p,
+                  label: tail(p) || "未知项目",
+                }))}
+              />
+              <SearchSelect
+                value={model}
+                allLabel="全部模型"
+                onChange={setModel}
+                options={snap.options.models.map((m) => ({ value: m, label: m }))}
+              />
+              {hasFilter && (
+                <button
+                  className="rp-btn rp-clear"
+                  onClick={() => {
+                    setAgent(null);
+                    setProject(null);
+                    setModel(null);
+                  }}
+                >
+                  清除筛选
+                </button>
+              )}
+            </div>
+
+            {/* 主区：趋势（左）+ 维度面板（右，点击条目联动全局筛选） */}
+            <div className="rp-main">
+              <section className="rp-card rp-trend">
+                <div className="rp-card-head">
+                  <div className="rp-card-title">
+                    用量趋势（
+                    {range === "today"
+                      ? "按小时"
+                      : range === "90d"
+                        ? "按周"
+                        : range === "all"
+                          ? "按月"
+                          : "按日"}
+                    ）
+                  </div>
+                  <MetricToggle
+                    value={trendMetric}
+                    onChange={setTrendMetric}
+                    options={[
+                      { key: "token", label: "Token" },
+                      { key: "calls", label: "次数" },
+                      { key: "duration", label: "时长" },
+                    ]}
+                  />
+                </div>
+                <Chart option={trendOption} height={300} />
+              </section>
+              <section className="rp-card rp-dims">
+                <DimBars
+                  title="按 Agent"
+                  items={snap.by_agent}
+                  active={agent}
+                  onSelect={setAgent}
+                  colorFn={agentColor}
+                />
+                <DimBars
+                  title="按项目"
+                  items={snap.by_project}
+                  active={project}
+                  onSelect={setProject}
+                  fmt={(l) => tail(l) || "未知项目"}
+                />
+                <DimBars title="按模型" items={snap.by_model} active={model} onSelect={setModel} />
+                <DimBars
+                  title="按供应商"
+                  items={snap.by_provider}
+                  active={null}
+                  onSelect={() => {}}
+                  selectable={false}
+                />
+                {/* 错误分布：label 是原始 error_type，中文归大类展示；条长=次数 */}
+                {snap.by_error.length > 0 && (
+                  <DimBars
+                    title="按错误类型"
+                    items={snap.by_error}
+                    active={null}
+                    onSelect={() => {}}
+                    selectable={false}
+                    fmt={errorReason}
+                  />
+                )}
+              </section>
+            </div>
+
+            {/* 热力图（本机时区） */}
             <section className="rp-card">
-              <div className="rp-card-title">按模型占比</div>
-              <Chart option={pieOption(models)} height={260} />
+              <div className="rp-card-head">
+                <div className="rp-card-title">周 × 小时分布（本机时区）</div>
+                <MetricToggle
+                  value={heatMetric}
+                  onChange={(v) => setHeatMetric(v === "calls" ? "calls" : "token")}
+                  options={[
+                    { key: "token", label: "Token" },
+                    { key: "calls", label: "次数" },
+                  ]}
+                />
+              </div>
+              <Chart option={heatOption} height={230} />
             </section>
+
+            {/* 会话明细（下钻终点）：按总 token 降序分页 */}
             <section className="rp-card">
-              <div className="rp-card-title">按供应商占比</div>
-              <Chart option={pieOption(providers)} height={260} />
+              <div className="rp-card-head">
+                <div className="rp-card-title">会话明细（共 {sess?.total ?? 0} 个）</div>
+                <div className="rp-pager">
+                  <button className="rp-btn" disabled={pageNo <= 1} onClick={() => turnPage(-1)}>
+                    上一页
+                  </button>
+                  <span className="rp-page-no">
+                    {pageNo} / {pageCount}
+                  </span>
+                  <button className="rp-btn" disabled={pageNo >= pageCount} onClick={() => turnPage(1)}>
+                    下一页
+                  </button>
+                </div>
+              </div>
+              <table className="rp-table">
+                <thead>
+                  <tr>
+                    <th>会话 / 项目</th>
+                    <th>Agent</th>
+                    <th>首次</th>
+                    <th>最近</th>
+                    <th>次数</th>
+                    <th>生成时长</th>
+                    <th>总 Token</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(sess?.rows ?? []).map((r) => (
+                    <tr key={r.session_id}>
+                      <td title={r.project_dir ?? r.session_id}>
+                        {r.title || (r.project_dir ? tail(r.project_dir) : r.session_id.slice(-8))}
+                      </td>
+                      <td>{r.agent}</td>
+                      <td>{fmtDT(r.first_ts)}</td>
+                      <td>{fmtDT(r.last_ts)}</td>
+                      <td>{r.calls}</td>
+                      <td title="模型生成时长合计；— 表示该 Agent 转录无时长字段">
+                        {fmtDuration(r.duration_ms)}
+                      </td>
+                      <td className="num">{fmtTokens(r.total_tokens)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </section>
-          </div>
-          <div className="rp-foot">
-            统计口径:输入 + 输出 + 缓存读写的全量 token · 数据源为本地 SQLite,不代表官方计费
-          </div>
-        </>
+
+            <div className="rp-foot">
+              统计口径：输入＋输出＋缓存读写的全量 token（与官方账单同口径）·
+              思考占比＝思考／（输入＋输出＋思考），不含缓存 ·
+              生成时长与平均首字仅 ZCode 等转录含时长字段的 Agent ·
+              数据源为本地 SQLite，不代表官方计费
+            </div>
+          </>
+        )
       )}
     </div>
   );

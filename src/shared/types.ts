@@ -121,6 +121,16 @@ export function fmtTokens(n: number): string {
   return String(n);
 }
 
+/** 工作时长（模型生成时长合计）：中文分级显示；
+ *  null 显示 —（该 Agent 的转录文件无时长字段，如 Claude Code） */
+export function fmtDuration(ms: number | null): string {
+  if (ms == null) return "—";
+  if (ms < 60_000) return `${Math.round(ms / 1000)} 秒`;
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)} 分 ${Math.round((ms % 60_000) / 1000)} 秒`;
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)} 时 ${Math.round((ms % 3_600_000) / 60_000)} 分`;
+  return `${Math.floor(ms / 86_400_000)} 天 ${Math.round((ms % 86_400_000) / 3_600_000)} 时`;
+}
+
 /** 相对时间文案（刚刚/N 分钟前/N 小时前/N 天前），给"空闲/已结束"配上时间量感 */
 export function fmtRelative(ts: number | null): string {
   if (ts == null) return "";
