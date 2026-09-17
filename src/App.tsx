@@ -77,6 +77,8 @@ function IslandApp() {
   const enterTimer = useRef<number | undefined>(undefined);
   // 移出后滑出隐藏的宽限定时器（400ms 内回来则取消，防误触）
   const leaveTimer = useRef<number | undefined>(undefined);
+  // 托盘"显示"召唤后的自动收起定时器（3s；鼠标移入即取消——用户正在看/用岛）
+  const summonTimer = useRef<number | undefined>(undefined);
 
   // 启动引导：读取岛尺寸/提醒阈值/悬停展开开关/贴边状态。
   // 初始贴边状态必须主动拉取：启动恢复在 setup 阶段已把窗口滑出隐藏，
@@ -191,6 +193,28 @@ function IslandApp() {
     };
   }, []);
 
+  // 托盘"显示"召唤（island-summon）：贴边停靠的岛滑回后 3s 自动滑出收回——
+  // 召唤是"临时亮位提醒"，无人理会就自己收好；鼠标移入则取消（交给常规
+  // 移出滑出逻辑接管），期间被托盘隐藏或拖走也不动作
+  useEffect(() => {
+    const un = listen("island-summon", () => {
+      window.clearTimeout(summonTimer.current);
+      summonTimer.current = window.setTimeout(() => {
+        if (
+          dockRef.current.edge !== "none" &&
+          !dockRef.current.hidden &&
+          document.visibilityState === "visible"
+        ) {
+          invoke("island_peek", { show: false }).catch(() => {});
+        }
+      }, 3000);
+    });
+    return () => {
+      window.clearTimeout(summonTimer.current);
+      un.then((f) => f());
+    };
+  }, []);
+
   useEffect(() => {
     const unlisten = listen<IslandSnapshot>("island-snapshot", (e) =>
       setSnap(e.payload),
@@ -237,6 +261,8 @@ function IslandApp() {
       className="root"
       onMouseEnter={() => {
         window.clearTimeout(leaveTimer.current);
+        // 用户正在看/用岛：托盘召唤的自动收起作废，收起交给移出逻辑
+        window.clearTimeout(summonTimer.current);
         if (dockRef.current.hidden) {
           // 贴边隐藏态：先滑入显示独立标签→胶囊；悬停展开开启时滑入完成后再展开面板
           invoke("island_peek", { show: true }).catch(() => {});

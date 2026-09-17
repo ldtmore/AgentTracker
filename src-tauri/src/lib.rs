@@ -338,7 +338,7 @@ fn open_file_location(path: String) -> Result<(), String> {
 }
 
 /// 显示并聚焦报表窗口（2026-09-18 展示改造：岛面板汇总条的"报表"入口，
-/// 与托盘菜单"报表…"同一条路径；窗口为常驻隐藏窗口，只 show 不重建）
+/// 与托盘菜单"报表"同一条路径；窗口为常驻隐藏窗口，只 show 不重建）
 #[tauri::command]
 fn show_report_window(app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
@@ -449,7 +449,7 @@ fn autohide_enabled(store: &Store) -> bool {
         .unwrap_or(true)
 }
 
-/// 解析 island_pos 设置（"x,y" 物理坐标）
+/// 解析 island_pos 设置（"x,y" 逻辑坐标；写入方 apply_snap 持久化的是逻辑坐标）
 fn saved_pos(store: &Store) -> Option<(i32, i32)> {
     store.get_setting("island_pos").and_then(|s| {
         s.split_once(',')
@@ -611,11 +611,17 @@ fn peek_apply(
         edge,
         to
     );
-    let m = motion.lock().unwrap();
+    // 先取值再放锁再广播：MutexGuard 实现 Drop 会活到函数末尾，持锁调用任何
+    // 会再 lock motion 的函数（如 refresh_toggle_text）都会同线程自锁——motion
+    // 永久被持有后主线程 Moved 处理器拿锁阻塞，全 UI 冻结（2026-09-18 实测教训）
+    let (edge_s, hidden_s) = {
+        let m = motion.lock().unwrap();
+        (m.edge.clone(), m.hidden)
+    };
     let _ = app.emit_to(
         ISLAND,
         "island-dock",
-        serde_json::json!({"edge": m.edge, "hidden": m.hidden}),
+        serde_json::json!({"edge": edge_s, "hidden": hidden_s}),
     );
 }
 
@@ -680,11 +686,17 @@ fn apply_snap(
     slide_to(&win, to, scale, motion, 8);
     // 状态迁移留痕（排障主线索："岛不贴边/位置不对/消失"靠它重建时间线）
     log::debug!("[岛] 拖放吸附：edge={} hidden={} 落点 {:?}", edge, hide, to);
-    let m = motion.lock().unwrap();
+    // 先取值再放锁再广播：MutexGuard 实现 Drop 会活到函数末尾，持锁调用任何
+    // 会再 lock motion 的函数（如 refresh_toggle_text）都会同线程自锁——motion
+    // 永久被持有后主线程 Moved 处理器拿锁阻塞，全 UI 冻结（2026-09-18 实测教训）
+    let (edge_s, hidden_s) = {
+        let m = motion.lock().unwrap();
+        (m.edge.clone(), m.hidden)
+    };
     let _ = app.emit_to(
         ISLAND,
         "island-dock",
-        serde_json::json!({"edge": m.edge, "hidden": m.hidden}),
+        serde_json::json!({"edge": edge_s, "hidden": hidden_s}),
     );
 }
 
@@ -765,7 +777,7 @@ pub fn run() {
 
             // 毛玻璃：❌不使用 window-vibrancy——Acrylic 是窗口级效果，会把整个
             // 矩形窗口染成磨砂灰，破坏胶囊形态；岛的正确做法=窗口全透明+CSS 自绘
-            // 背景（见 App.css）。依赖保留备注：M1 若做全宽岛形态可再启用。
+            // 背景（见 App.css）。依赖已移除（M1-5 全宽形态划出，保留理由失效）
 
             // 贴边/拖拽运动状态（setup 内创建，commands 与看护线程经 manage 共享）；
             // 必须先于 position_island 创建，启动定位要经它防误判
@@ -930,53 +942,118 @@ fn position_island(
     slide_to(win, pos, mon.scale_factor(), motion, 1);
 }
 
-/// 系统托盘：常驻核心；菜单=显示/隐藏 + 设置 + 关于 + 退出
+/// 托盘"灵动岛"菜单项句柄：窗口可见性变化后据此刷新菜单文案
+struct TrayToggle(tauri::menu::MenuItem<tauri::Wry>);
+
+/// 系统托盘：常驻核心；菜单三组经分隔线隔离——岛操作（显示/隐藏）｜
+/// 开窗（报表/设置/关于）｜退出，操作逻辑不同的组各自归拢便于区分。
+/// 显隐语义（2026-09-18 与所有者确认）："隐藏"=任意可见态（胶囊或贴边标签）
+/// 一键彻底消失；"显示"=临时召唤——先以胶囊态亮出位置提醒（贴边标签太小，
+/// 用户游戏后未必记得贴在哪），贴边停靠则 3s 后自动滑出收回。
+/// 典型场景：玩游戏前一键隐藏、玩完一键召回，全程监控不断
 fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
-    use tauri::menu::{Menu, MenuItem};
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::TrayIconBuilder;
 
-    let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏灵动岛", true, None::<&str>)?;
-    let report = MenuItem::with_id(app, "report", "报表…", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
-    let about = MenuItem::with_id(app, "about", "关于…", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle", "隐藏", true, None::<&str>)?;
+    let sep_island = PredefinedMenuItem::separator(app)?;
+    let report = MenuItem::with_id(app, "report", "报表", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
+    let sep_quit = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &report, &settings, &about, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&toggle, &sep_island, &report, &settings, &about, &sep_quit, &quit],
+    )?;
     TrayIconBuilder::with_id("at-tray")
-        .tooltip("AgentTrackerIsland")
+        .tooltip("智岛（AgentTrackerIsland）")
         .icon(app.default_window_icon().expect("应用图标").clone())
         .menu(&menu)
         .on_menu_event(|app, ev| match ev.id.as_ref() {
             "quit" => app.exit(0),
-            "toggle" => {
-                if let Some(w) = app.get_webview_window(ISLAND) {
-                    if w.is_visible().unwrap_or(false) {
-                        if let Err(e) = w.hide() {
-                            log::debug!("[岛] 托盘隐藏失败：{e}");
-                        }
-                    } else if let Err(e) = w.show() {
-                        log::debug!("[岛] 托盘显示失败：{e}");
+            // 除"退出"外的菜单动作转后台线程执行：菜单回调跑在主线程事件循环内，
+            // 回调内的同步等待（getter/set_text 应答、SQLite 读等）会阻塞 UI 分发，
+            // 转线程是主线程减负的卫生习惯。注：2026-09-18"托盘显示灵动岛卡死"
+            // 的真因是 peek_apply/apply_snap 持 motion 锁调用 refresh_toggle_text
+            // 自锁（已修，见函数尾部注释），与本转线程无因果
+            other => {
+                let app = app.clone();
+                let id = other.to_string();
+                std::thread::spawn(move || match id.as_str() {
+                    "toggle" => {
+                        toggle_island(&app);
+                        refresh_toggle_text(&app);
                     }
-                }
+                    "report" => show_aux_window(&app, "report"),
+                    "settings" => show_aux_window(&app, "settings"),
+                    "about" => show_aux_window(&app, "about"),
+                    _ => {}
+                });
             }
-            "report" => {
-                if let Some(w) = app.get_webview_window("report") {
-                    let _ = (w.show(), w.set_focus());
-                }
-            }
-            "settings" => {
-                if let Some(w) = app.get_webview_window("settings") {
-                    let _ = (w.show(), w.set_focus());
-                }
-            }
-            "about" => {
-                if let Some(w) = app.get_webview_window("about") {
-                    let _ = (w.show(), w.set_focus());
-                }
-            }
-            _ => {}
         })
         .build(app)?;
+    // 菜单项句柄入全局状态（菜单点击只可能发生在 build_tray 之后，时序安全）；
+    // 再按启动态定初值文案——启动贴边恢复发生在 setup 更早处，此时 hidden 已就绪
+    app.manage(TrayToggle(toggle));
+    refresh_toggle_text(app.handle());
     Ok(())
+}
+
+/// 显示并聚焦辅助窗口（设置/报表/关于：常驻隐藏窗口，只 show 不重建）
+fn show_aux_window(app: &tauri::AppHandle, label: &str) {
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = (w.show(), w.set_focus());
+    }
+}
+
+/// 托盘切换灵动岛显隐（"隐藏"=彻底消失，"显示"=临时召唤）。
+/// 贴边隐藏态的窗口仍在屏外"可见"（is_visible=true）——隐藏须连边缘标签一起
+/// 整窗 hide；显示则先亮胶囊（位置提醒），贴边停靠时滑回停靠位并通知前端
+/// 3s 后自动收起（前端持定时器，鼠标移入即取消，见 App.tsx island-summon）
+fn toggle_island(app: &tauri::AppHandle) {
+    let Some(w) = app.get_webview_window(ISLAND) else {
+        return;
+    };
+    if w.is_visible().unwrap_or(false) {
+        // 任意可见态（胶囊或贴边标签）→ 彻底隐藏；停靠坐标仍记忆，供下次召回
+        if let Err(e) = w.hide() {
+            log::debug!("[岛] 托盘隐藏失败：{e}");
+        }
+        return;
+    }
+    if let Err(e) = w.show() {
+        log::debug!("[岛] 托盘显示失败：{e}");
+        return;
+    }
+    let motion = app.state::<Arc<Mutex<IslandMotion>>>();
+    let edge = motion.lock().unwrap().edge.clone();
+    if edge != "none" {
+        // 贴边停靠：滑回停靠位（胶囊态亮出位置），并广播"托盘召唤"给前端计时
+        let store = app.state::<Arc<Store>>();
+        peek_apply(app, store.as_ref(), motion.inner(), false);
+        let _ = app.emit_to(ISLAND, "island-summon", ());
+    }
+    // edge=none 自由摆放：胶囊在原位直接出现，无自动收起
+}
+
+/// 托盘"显示/隐藏"菜单项文案刷新：纯看窗口可见性——胶囊态与贴边标签态都算
+/// 可见（贴边隐藏的窗口仍在屏外 visible，标签还占着屏幕边缘），仅整窗 hide
+/// 后才显示"显示"。托盘未建好时（try_state 落空）静默跳过。
+/// ⚠ 历史教训：旧版会 lock motion，曾被 peek_apply 在持 motion 锁的作用域内
+/// 调用（MutexGuard 活到函数末尾），非重入互斥量同线程自锁致全 UI 冻结——
+/// 调用方须始终在 motion 锁外调用本函数
+fn refresh_toggle_text(app: &tauri::AppHandle) {
+    let Some(item) = app.try_state::<TrayToggle>() else {
+        return;
+    };
+    let visible = app
+        .get_webview_window(ISLAND)
+        .is_some_and(|w| w.is_visible().unwrap_or(true));
+    let text = if visible { "隐藏" } else { "显示" };
+    if let Err(e) = item.0.set_text(text) {
+        log::debug!("[托盘] 菜单文案更新失败：{e}");
+    }
 }
 
 /// 后台聚合线程：10s tick → 快照广播给前端（02-DESIGN §2.3 调度）。

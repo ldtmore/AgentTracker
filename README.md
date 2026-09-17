@@ -6,7 +6,7 @@
 
 > **定位**：主流 Agent 状态实时监控灵动岛工作台 —— 旁路观测，只看，不碰。
 
-[![status](https://img.shields.io/badge/status-M1_进行中（设置页改造完成·审查优化落地）-blue)](docs/03-TASKS.md)
+[![status](https://img.shields.io/badge/status-M1_进行中（报表·双主题·贴边隐藏落地）-blue)](docs/03-TASKS.md)
 [![tauri](https://img.shields.io/badge/Tauri-2-orange)](https://tauri.app)
 [![rust](https://img.shields.io/badge/Rust-stable-success)](https://www.rust-lang.org)
 

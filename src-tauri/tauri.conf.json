@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "island",
-        "title": "AgentTrackerIsland",
+        "title": "智岛",
         "width": 360,
         "height": 48,
         "decorations": false,
@@ -25,7 +25,7 @@
       },
       {
         "label": "settings",
-        "title": "AgentTrackerIsland 设置",
+        "title": "智岛 · 设置",
         "url": "index.html#settings",
         "width": 800,
         "height": 600,
@@ -37,7 +37,7 @@
       },
       {
         "label": "report",
-        "title": "AgentTrackerIsland 报表",
+        "title": "智岛 · 报表",
         "url": "index.html#report",
         "width": 900,
         "height": 700,
@@ -49,7 +49,7 @@
       },
       {
         "label": "about",
-        "title": "AgentTrackerIsland 关于",
+        "title": "智岛 · 关于",
         "url": "index.html#about",
         "width": 460,
         "height": 540,

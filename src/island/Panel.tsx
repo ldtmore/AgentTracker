@@ -107,7 +107,7 @@ function SessionCard({ s }: { s: SessionView }) {
           <span className={`card-state${s.state === "error" ? " text-error" : ""}`}>{stateFinal}</span>
         </div>
         <div className="card-line2">
-          <Tip content={model ? `最近使用的模型：${model}` : "尚未捕获该会话的模型调用"}>
+          <Tip content={model ? `使用的模型：${model}` : "尚未捕获该会话的模型调用"}>
             <span className="card-tag">
               <ChipIcon />
               {model ?? "--"}

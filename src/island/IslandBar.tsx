@@ -141,7 +141,7 @@ export default function IslandBar({
     >
       <span className={`dot ${meta.dot}`} title={meta.label} />
       <span className="island-text" title={snap ? `${meta.label}${snap.degraded ? "\n采集源连续失败，数据可能滞后" : ""}` : undefined}>
-        {snap ? activeText(snap) : "AgentTrackerIsland 启动中…"}
+        {snap ? activeText(snap) : "智岛启动中…"}
         {
           // 降级可见（审查 1.1 + C7）：警示图标强化，与正常文案拉开视觉差
           snap?.degraded && (
@@ -160,12 +160,12 @@ export default function IslandBar({
                 GLM {windowLabel(tense.window_kind)}·{Math.round(tense.used_percent)}%
               </span>
             ) : (
-              <span className="island-quota quota-off" title="GLM Coding Plan\n额度查询暂不可用，约 5 分钟后自动重试">
+              <span className="island-quota quota-off" title={"GLM Coding Plan\n额度查询暂不可用，约 5 分钟后自动重试"}>
                 额度 --
               </span>
             )
           ) : (
-            <span className="island-quota quota-off" title="尚未配置 GLM 凭据\n到设置页配置后可展示 5h/周额度用量">
+            <span className="island-quota quota-off" title={"尚未配置 GLM 凭据\n到设置页配置后可展示 5h/周额度用量"}>
               额度未配置
             </span>
           ))
