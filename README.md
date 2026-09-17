@@ -1,8 +1,8 @@
 <div align="center">
-  <img src="src-tauri/icons/icon.png" width="140" alt="智岛 AgentTrackerIsland 应用图标" />
+  <img src="src-tauri/icons/icon.png" width="140" alt="去你的岛 AgentTrackerIsland 应用图标" />
 </div>
 
-<h1 align="center">智岛 · AgentTrackerIsland</h1> 
+<h1 align="center">去你的岛 · AgentTrackerIsland</h1> 
 
 > **定位**：主流 Agent 状态实时监控灵动岛工作台 —— 旁路观测，只看，不碰。
 
@@ -12,7 +12,7 @@
 
 ## 这是什么
 
-**智岛**（AgentTrackerIsland）是一个 Windows 优先的轻量桌面工具：以灵动岛形态实时监控各主流 AI Agent 的状态与消耗，有它，用户随时掌握各 Agent 的工作状态与 token/额度数据；没有它，各 Agent 照常工作——零影响。
+**去你的岛**（又名“智岛”，AgentTrackerIsland）是一个 Windows 优先的轻量桌面工具：以灵动岛形态实时监控各主流 AI Agent 的状态与消耗，有它，用户随时掌握各 Agent 的工作状态与 token/额度数据；没有它，各 Agent 照常工作——零影响。
 
 - 🏝️ **灵动岛状态监控** — 颜色状态灯实时显示各 Agent（工作中/已完成/等待输入/出错），悬浮展开多 Agent 详情，贴边自动隐藏，点击跳转对应终端窗口
 - 💰 **用量与额度统计** — token 消耗按供应商/模型/时间统计；订阅额度（如 GLM Coding Plan 的 5 小时/每周窗口）实时显示用量百分比与重置倒计时

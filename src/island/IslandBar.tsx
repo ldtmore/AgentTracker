@@ -141,7 +141,7 @@ export default function IslandBar({
     >
       <span className={`dot ${meta.dot}`} title={meta.label} />
       <span className="island-text" title={snap ? `${meta.label}${snap.degraded ? "\n采集源连续失败，数据可能滞后" : ""}` : undefined}>
-        {snap ? activeText(snap) : "智岛启动中…"}
+        {snap ? activeText(snap) : "「去你的岛」启动中…"}
         {
           // 降级可见（审查 1.1 + C7）：警示图标强化，与正常文案拉开视觉差
           snap?.degraded && (

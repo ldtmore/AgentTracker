@@ -1,6 +1,6 @@
 /**
  * 关于页（关于窗口）：项目简介 + 版本号 + GitHub 仓库链接
- * - 定位展示：旁路观测工具「只看，不碰」的一句话定位，帮助用户理解工具边界
+ * - 定位展示：旁路观测工具「只看不碰」的一句话定位，帮助用户理解工具边界
  * - 版本号：getVersion() 从 Rust 侧（tauri.conf.json）读取，前端不硬编码
  * - 升级策略（所有者拍板，程序简单化）：程序内不做任何检测/下载/升级，
  *   仅提供仓库链接与小字引导，由用户自行跳转浏览器下载安装包手动升级
@@ -54,15 +54,16 @@ export default function About() {
     <div className="ab-root">
       {/* 品牌区：图标 + 中英文名 + 口号 + 一句话定位 */}
       <section className="ab-hero">
-        <img className="ab-logo" src={appIcon} alt="智岛应用图标" />
+        <img className="ab-logo" src={appIcon} alt="去你的岛应用图标" />
         <div className="ab-names">
-          <span className="ab-name-zh">智岛</span>
+          <span className="ab-name-zh">去你的岛</span>
           <span className="ab-name-en">AgentTrackerIsland</span>
         </div>
         <div className="ab-slogan">主流 Agent 状态实时监控灵动岛工作台</div>
         <p className="ab-intro">
-          智岛是当前主流 AI Agent 的旁路观测工具：只看，不碰。实时掌握各 Agent
-          的运行状态与用量消耗；有它无它，你的原有工作流照常运转，零影响。
+          去你的岛，又名“智岛”（AgentTrackerIsland），是一款主流 AI Agent 的
+          旁路观测工具：只看不碰。实时掌握各 Agent 的运行状态与用量消耗；
+          有它无它，你的原有工作流照常运转，零影响。
         </p>
       </section>
 

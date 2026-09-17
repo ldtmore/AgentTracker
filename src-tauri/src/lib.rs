@@ -967,7 +967,7 @@ fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
         &[&toggle, &sep_island, &report, &settings, &about, &sep_quit, &quit],
     )?;
     TrayIconBuilder::with_id("at-tray")
-        .tooltip("智岛（AgentTrackerIsland）")
+        .tooltip("去你的岛 · AgentTrackerIsland")
         .icon(app.default_window_icon().expect("应用图标").clone())
         .menu(&menu)
         .on_menu_event(|app, ev| match ev.id.as_ref() {
