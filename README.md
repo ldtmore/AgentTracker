@@ -2,7 +2,7 @@
   <img src="src-tauri/icons/icon.png" width="140" alt="智岛 AgentTrackerIsland 应用图标" />
 </div>
 
-<h1 align="center">AgentTrackerIsland · 智岛</h1> 
+<h1 align="center">智岛 · AgentTrackerIsland</h1> 
 
 > **定位**：主流 Agent 状态实时监控灵动岛工作台 —— 旁路观测，只看，不碰。
 
