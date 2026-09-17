@@ -62,9 +62,17 @@ function IslandApp() {
   // 移出后滑出隐藏的宽限定时器(400ms 内回来则取消,防误触)
   const leaveTimer = useRef<number | undefined>(undefined);
 
-  // 启动时读取岛尺寸/提醒阈值/悬停展开开关(读取失败用默认值)
+  // 启动时读取岛尺寸/提醒阈值/悬停展开开关/贴边状态(读取失败用默认值)
   useEffect(() => {
     invoke<IslandMetrics>("island_metrics").then(setMetrics).catch(() => {});
+    // 初始贴边状态必须主动拉取:启动恢复在 setup 阶段已把窗口滑出隐藏,
+    // 早于本窗口事件监听建立,island-dock 事件收不到;不拉取会把隐藏态渲染成完整胶囊
+    invoke<{ edge: string; hidden: boolean }>("island_dock_state")
+      .then((d) => {
+        dockRef.current = d;
+        setDock(d);
+      })
+      .catch(() => {});
     invoke<Record<string, string>>("get_settings")
       .then((s) => {
         setThresholds(sanitizeThresholds(s.threshold_warn, s.threshold_danger));

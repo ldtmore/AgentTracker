@@ -98,15 +98,11 @@ const SETTING_KEYS_ALLOW: &[&str] = &[
 ];
 
 /// 读取全部设置。
-/// 敏感值不下发前端(审查 2.1.2):glm_token 以 glm_token_set 布尔位代替,
-/// 设置页与聚合器各自经 Rust 侧读写真实值,三个 WebView 均拿不到明文 key
+/// glm_token 原样随设置下发(2026-09-17 所有者要求 API Key 回显输入框,
+/// 推翻原审查 2.1.2"敏感值不下发前端"的决策;仅下发到本机自身窗口)
 #[tauri::command]
 fn get_settings(store: tauri::State<'_, Arc<Store>>) -> std::collections::HashMap<String, String> {
-    let mut all = store.all_settings();
-    if let Some(token) = all.remove("glm_token") {
-        all.insert("glm_token_set".into(), (!token.is_empty()).to_string());
-    }
-    all
+    store.all_settings()
 }
 
 /// 写单条设置(白名单外的键拒绝并报错,前端会显示"保存失败")
@@ -259,7 +255,9 @@ fn island_peek(
     }
 }
 
-/// 贴边相关设置变更后的状态修正:如关闭自动隐藏时岛正处于隐藏态 → 滑回停靠位显示
+/// 贴边相关设置变更后的状态修正(双向对称):
+/// - 关闭自动隐藏时岛正处于隐藏态 → 滑回停靠位显示
+/// - 开启自动隐藏时岛正停靠可见 → 立即滑出隐藏
 #[tauri::command]
 fn island_refresh(
     app: tauri::AppHandle,
@@ -270,9 +268,22 @@ fn island_refresh(
         let m = motion.lock().unwrap();
         (m.edge.clone(), m.hidden)
     };
-    if edge != "none" && hidden && !autohide_enabled(store.as_ref()) {
-        peek_apply(&app, store.as_ref(), &motion, false);
+    if edge != "none" {
+        let autohide = autohide_enabled(store.as_ref());
+        if hidden && !autohide {
+            peek_apply(&app, store.as_ref(), &motion, false);
+        } else if !hidden && autohide {
+            peek_apply(&app, store.as_ref(), &motion, true);
+        }
     }
+}
+
+/// 查询岛当前贴边/隐藏状态(前端挂载时主动拉取一次:启动恢复发生在 setup 阶段,
+/// 早于前端事件监听建立,事件推送会漏掉首帧,导致重启后的隐藏态渲染成完整胶囊)
+#[tauri::command]
+fn island_dock_state(motion: tauri::State<'_, Arc<Mutex<IslandMotion>>>) -> serde_json::Value {
+    let m = motion.lock().unwrap();
+    serde_json::json!({ "edge": m.edge, "hidden": m.hidden })
 }
 
 /// 用户按下岛(拖拽开始):取消在播滑动动画与待评估位置,
@@ -556,6 +567,7 @@ pub fn run() {
             report_heatmap,
             island_peek,
             island_refresh,
+            island_dock_state,
             island_drag_start,
             island_metrics
         ])
@@ -667,6 +679,8 @@ pub fn run() {
                             &motion,
                             1,
                         );
+                        // 同步内存隐藏态:否则 island_peek 会误判"未隐藏",悬停滑入失效
+                        motion.lock().unwrap().hidden = true;
                     }
                 }
             }

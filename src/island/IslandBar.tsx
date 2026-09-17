@@ -1,8 +1,16 @@
 /**
- * 收缩态胶囊:状态灯 + 摘要文案 + token 缩写;整条可拖拽
+ * 收缩态胶囊:状态灯 + 摘要文案 + token 缩写;整条可拖拽。
+ * 拖拽不用 data-tauri-drag-region:其注入脚本在首次按下即进入系统拖拽循环,
+ * 单击的 mouseup 被系统吞掉、onClick 永远收不到(表现为"双击才点得动");
+ * 这里改为手动判别——按下后位移超阈值才进入系统拖拽,未超阈值松手即单击
  */
+import { useRef } from "react";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { IslandSnapshot, Thresholds } from "../shared/types";
 import { fmtTokens } from "../shared/types";
+
+/** 单击/拖拽判定的位移阈值(逻辑像素):按下后移动超过该值才算拖拽 */
+const DRAG_THRESHOLD_PX = 6;
 
 const ISLAND_META: Record<
   IslandSnapshot["island"],
@@ -48,14 +56,49 @@ export default function IslandBar({
   const quotaCls =
     q5hPct != null ? ` quota-${quotaLevel(q5hPct, thresholds.warn, thresholds.danger)}` : "";
 
+  // 按压追踪:起点坐标 + 是否已进入系统拖拽(进入后松手不算单击)
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
+  const dragging = useRef(false);
+
+  /** 按下:仅记录起点,不立即拖拽(为单击判定留出位移余量) */
+  const onMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    pressOrigin.current = { x: e.clientX, y: e.clientY };
+    dragging.current = false;
+  };
+
+  /** 按住移动:位移超阈值 → 交给系统拖拽(此后鼠标事件由系统接管,贴靠仍由 Rust 评估) */
+  const onMouseMove = (e: React.MouseEvent) => {
+    const o = pressOrigin.current;
+    if (!o || dragging.current) return;
+    if (Math.hypot(e.clientX - o.x, e.clientY - o.y) > DRAG_THRESHOLD_PX) {
+      dragging.current = true;
+      void getCurrentWebviewWindow().startDragging();
+    }
+  };
+
+  /** 松手:未进入系统拖拽 = 单击 → 切换信息卡片(仅悬停展开关闭时 onToggle 有值) */
+  const onMouseUp = () => {
+    const wasDragging = dragging.current;
+    pressOrigin.current = null;
+    dragging.current = false;
+    if (!wasDragging) onToggle?.();
+  };
+
   return (
     <div
       className={`island${onToggle ? " island-clickable" : ""}`}
-      data-tauri-drag-region
-      onClick={onToggle}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={onMouseUp}
+      // 按下后未达拖拽阈值就移出胶囊松手:清除按压态,防止落点处的 mouseup 误判为单击
+      onMouseLeave={() => {
+        pressOrigin.current = null;
+        dragging.current = false;
+      }}
     >
-      <span className={`dot ${meta.dot}`} data-tauri-drag-region />
-      <span className="island-text" data-tauri-drag-region>
+      <span className={`dot ${meta.dot}`} />
+      <span className="island-text">
         {snap
           ? `${total} 会话${working > 0 ? ` · ${working} 工作中` : ""} · ${meta.label}${
               // 降级可见(审查 1.1):采集源连续失败时明确提示,与"没有会话"区分
@@ -64,12 +107,12 @@ export default function IslandBar({
           : "AgentTrackerIsland 启动中…"}
       </span>
       {q5hPct != null && (
-        <span className={`island-quota${quotaCls}`} data-tauri-drag-region>
+        <span className={`island-quota${quotaCls}`}>
           5h {Math.round(q5hPct)}%
         </span>
       )}
       {snap && snap.sessions.length > 0 && (
-        <span className="island-tokens" data-tauri-drag-region>
+        <span className="island-tokens">
           累计 {fmtTokens(snap.sessions.reduce((a, s) => a + s.session_tokens, 0))}
         </span>
       )}

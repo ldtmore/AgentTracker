@@ -6,7 +6,8 @@
  *   状态由 Switch 与徽标表达,文案不随选中态变化(遵循 Fluent 开关文案规范)
  * - 反馈:校验错误内联显示在出错行正下方;操作结果用顶部 toast(成功 2.5s 自动消失,
  *   失败常驻直到下一次提示);凭据/阈值"重启生效"的事实写入行描述,不做打扰式弹提示
- * - Key 不回显;留空失焦 = 沿用已存 Key 或自动发现链(env/claude-menu),不覆盖
+ * - Key 回显已存值(2026-09-17 所有者要求,推翻原"不回显"决策);
+ *   清空失焦 = 沿用已存 Key 或自动发现链(env / claude-menu),不写空值覆盖
  * - 界面文案一律简体中文标点(2026-09-17 验收建议 3)
  */
 import { useEffect, useRef, useState } from "react";
@@ -168,7 +169,8 @@ function EyeIcon({ off }: { off: boolean }) {
 export default function Settings() {
   // —— 表单状态(每项改动即时落库,无统一保存按钮) ——
   const [glmBase, setGlmBase] = useState("https://open.bigmodel.cn");
-  const [glmToken, setGlmToken] = useState(""); // 输入框内容;保存后清空(不回显已存 Key)
+  const [glmToken, setGlmToken] = useState(""); // 输入框内容;回显已存 Key(2026-09-17 所有者要求)
+  const savedTokenRef = useRef(""); // 最近一次落库的 Key:失焦时比对,未变更不重复落库/提示
   const [showToken, setShowToken] = useState(false); // 明文/密文切换
   const [tokenFrom, setTokenFrom] = useState(""); // 已生效凭据来源(聚合器启动时写入)
   const [warn, setWarn] = useState("80");
@@ -203,7 +205,11 @@ export default function Settings() {
       try {
         const s = (await invoke("get_settings")) as Record<string, string>;
         if (s.glm_base) setGlmBase(s.glm_base);
-        // Key 不回显:输入框保持空,来源经 glm_token_source 徽标提示
+        // 回显已存 Key(2026-09-17 所有者要求;未配置过则保持空,来源经 glm_token_source 徽标提示)
+        if (s.glm_token) {
+          setGlmToken(s.glm_token);
+          savedTokenRef.current = s.glm_token;
+        }
         if (s.threshold_warn) setWarn(s.threshold_warn);
         if (s.threshold_danger) setDanger(s.threshold_danger);
         if (s.cleanup_days) {
@@ -255,12 +261,14 @@ export default function Settings() {
     }
   };
 
-  /** 单键落库;失败经 toast 提示(不阻塞界面) */
-  const saveKey = async (key: string, value: string) => {
+  /** 单键落库;失败经 toast 提示(不阻塞界面);返回是否成功,供调用方决定后续反馈 */
+  const saveKey = async (key: string, value: string): Promise<boolean> => {
     try {
       await invoke("set_setting", { key, value });
+      return true;
     } catch (e) {
       showToast(`保存失败：${e}`, "error");
+      return false;
     }
   };
 
@@ -334,13 +342,19 @@ export default function Settings() {
     await saveKey("glm_base", v);
   };
 
-  /** API Key 失焦提交:留空 = 沿用已存或自动发现链,不写空值覆盖;保存后清空不回显 */
+  /** API Key 失焦提交:与已存值一致则跳过(防误点失焦重复落库/提示);
+   *  清空失焦 = 沿用已存 Key 或自动发现链,不写空值覆盖。
+   *  保存成功后输入框保留并回正内容(回显),徽标即时点亮 */
   const commitToken = async () => {
     const t = glmToken.trim();
-    if (!t) return;
-    setGlmToken("");
-    await saveKey("glm_token", t);
-    showToast("已保存，凭据在重启应用后生效", "ok");
+    if (!t || t === savedTokenRef.current) return;
+    if (await saveKey("glm_token", t)) {
+      setGlmToken(t);
+      savedTokenRef.current = t;
+      // 重启后聚合器会把徽标改写为实际来源(应用设置)
+      setTokenFrom("已保存（重启后生效）");
+      showToast("已保存，凭据在重启应用后生效", "ok");
+    }
   };
 
   /** 阈值失焦校验并落库:两个值都合法且琥珀 < 红色才写入,否则就近提示 */
@@ -488,7 +502,7 @@ export default function Settings() {
               className="st-input"
               type={showToken ? "text" : "password"}
               value={glmToken}
-              placeholder="输入新 Key，失焦自动保存"
+              placeholder="失焦自动保存"
               onChange={(e) => setGlmToken(e.target.value)}
               onBlur={commitToken}
               onKeyDown={blurOnEnter}
