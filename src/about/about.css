@@ -1,0 +1,195 @@
+/* 关于页样式：与设置页（settings.css）同规范——卡片 + 发丝线行分隔，
+   色板全走 App.css 主题变量，深浅双主题自适应；ab-* 前缀防跨页冲突 */
+
+.ab-root {
+  box-sizing: border-box;
+  height: 100vh;
+  overflow-y: auto;
+  background: var(--root-bg);
+  color: var(--text-1);
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 13px;
+  padding: 16px 18px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 滚动条：与设置页/岛面板同款 6px 细条 */
+.ab-root::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ab-root::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ab-root::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 3px;
+}
+
+.ab-root::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+
+/* ===== 品牌区：图标 + 名称 + 口号 + 简介，居中排版 ===== */
+
+.ab-hero {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px 18px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.ab-logo {
+  width: 64px;
+  height: 64px;
+}
+
+.ab-names {
+  margin-top: 12px;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ab-name-zh {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.ab-name-en {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.ab-slogan {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.ab-intro {
+  margin: 10px 0 0;
+  max-width: 350px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+/* ===== 信息卡片：版本 / 仓库，行结构与设置页同款（发丝线分隔） ===== */
+
+.ab-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 2px 14px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ab-row {
+  padding: 11px 0;
+}
+
+.ab-row + .ab-row {
+  border-top: 1px solid var(--border);
+}
+
+.ab-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ab-row-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.ab-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+
+.ab-row-desc {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+.ab-row-control {
+  flex: none;
+}
+
+/* 版本号：右侧加重展示 */
+.ab-version {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+/* 仓库链接：按钮语义、链接观感（强调色 + 下划线），点击经 Rust 打开浏览器 */
+.ab-link {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-align: left;
+  word-break: break-all;
+  cursor: pointer;
+}
+
+.ab-link:hover {
+  opacity: 0.85;
+}
+
+/* 链接下方小字引导：说明升级由用户手动完成 */
+.ab-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-3);
+}
+
+/* 复制按钮：与设置页 st-btn 同款 */
+.ab-btn {
+  background: var(--btn-bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text-1);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ab-btn:hover {
+  background: var(--btn-bg-hover);
+}
+
+/* ===== 页脚：产品红线关键词，贴底居中 ===== */
+
+.ab-foot {
+  margin-top: auto;
+  padding: 4px 0 2px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-4);
+}

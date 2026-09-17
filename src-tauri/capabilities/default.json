@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window",
-  "windows": ["island", "settings", "report"],
+  "windows": ["island", "settings", "report", "about"],
   "permissions": [
     "core:default",
     "core:window:allow-set-size",

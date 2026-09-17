@@ -46,6 +46,18 @@
         "visible": false,
         "resizable": true,
         "center": true
+      },
+      {
+        "label": "about",
+        "title": "AgentTrackerIsland 关于",
+        "url": "index.html#about",
+        "width": 460,
+        "height": 540,
+        "minWidth": 400,
+        "minHeight": 460,
+        "visible": false,
+        "resizable": true,
+        "center": true
       }
     ],
     "security": {

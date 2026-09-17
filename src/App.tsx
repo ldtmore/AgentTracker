@@ -1,7 +1,7 @@
 /**
  * 应用入口：按窗口 URL hash 分流 —— #settings 渲染设置页（常规窗口），
- * #report 渲染报表页（常规窗口），其余渲染灵动岛（透明窗口）；
- * 岛消费 island-snapshot 快照，hover 展开面板
+ * #report 渲染报表页（常规窗口），#about 渲染关于页（常规窗口），
+ * 其余渲染灵动岛（透明窗口）；岛消费 island-snapshot 快照，hover 展开面板
  */
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
@@ -19,6 +19,8 @@ import "./App.css";
 
 // 报表页 lazy 分割：echarts 只在报表窗口加载，岛窗口 bundle 不受影响（01-RESEARCH §9）
 const Report = lazy(() => import("./report/Report"));
+// 关于页 lazy 分割：与报表页同款——独立窗口独立加载，岛窗口 bundle 不受影响
+const About = lazy(() => import("./about/About"));
 
 /** 岛自适应尺寸（Rust island_metrics：显示器逻辑宽 × 30%，夹取 380–800） */
 interface IslandMetrics {
@@ -223,7 +225,7 @@ function filterSnap(
   return { ...snap, sessions: snap.sessions.filter((s) => agents.includes(s.agent)) };
 }
 
-/** 按 URL hash 分流：设置窗口 / 报表窗口 / 灵动岛窗口 */
+/** 按 URL hash 分流：设置窗口 / 报表窗口 / 关于窗口 / 灵动岛窗口 */
 function App() {
   if (window.location.hash === "#settings") {
     return <Settings />;
@@ -232,6 +234,13 @@ function App() {
     return (
       <Suspense fallback={null}>
         <Report />
+      </Suspense>
+    );
+  }
+  if (window.location.hash === "#about") {
+    return (
+      <Suspense fallback={null}>
+        <About />
       </Suspense>
     );
   }

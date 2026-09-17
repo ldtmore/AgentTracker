@@ -156,6 +156,27 @@ fn autostart_set(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
     }
 }
 
+// ===== 关于窗口 commands =====
+
+/// GitHub 仓库地址（与前端展示/复制文案保持同步：src/about/About.tsx 的 REPO_URL，两处同改）
+const REPO_URL: &str = "https://github.com/ldtmore/AgentTrackerIsland";
+
+/// 在系统默认浏览器打开项目仓库（关于页「GitHub 仓库」链接）。
+/// URL 为 Rust 侧常量而非前端传参，零注入面（同 set_setting 白名单思路）；
+/// explorer 打开 URL 即调起默认浏览器。升级策略（所有者拍板）：程序内不检测
+/// 不下载不更新，由用户自行到 Releases 页下载安装包手动升级，本命令是唯一入口
+#[tauri::command]
+fn open_repository() -> Result<(), String> {
+    match std::process::Command::new("explorer").arg(REPO_URL).spawn() {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // 失败必须留痕（审查 1.1）：返回 Err 由前端提示，不 panic 不阻塞
+            log::warn!("打开仓库链接失败：{e}");
+            Err(format!("无法打开浏览器：{e}"))
+        }
+    }
+}
+
 // ===== 报表 commands（M1-1） =====
 // 报表聚合是重查询（审查 2.2.1：Tauri 同步 command 在主线程执行，"全部"范围
 // 大数据量时会冻结包括岛在内的全部窗口）——统一走 spawn_blocking 挪到线程池
@@ -561,6 +582,7 @@ pub fn run() {
             uninstall_hooks,
             autostart_get,
             autostart_set,
+            open_repository,
             report_daily,
             report_by_model,
             report_by_provider,
@@ -685,8 +707,8 @@ pub fn run() {
                 }
             }
 
-            // 设置/报表窗口：关闭即隐藏（而非销毁），保证托盘可反复唤起
-            for label in ["settings", "report"] {
+            // 设置/报表/关于窗口：关闭即隐藏（而非销毁），保证托盘可反复唤起
+            for label in ["settings", "report", "about"] {
                 if let Some(w) = app.get_webview_window(label) {
                     let w2 = w.clone();
                     w.on_window_event(move |ev| {
@@ -746,7 +768,7 @@ fn position_island(
     slide_to(win, pos, mon.scale_factor(), motion, 1);
 }
 
-/// 系统托盘：常驻核心；菜单=显示/隐藏 + 设置 + 退出
+/// 系统托盘：常驻核心；菜单=显示/隐藏 + 设置 + 关于 + 退出
 fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
     use tauri::menu::{Menu, MenuItem};
     use tauri::tray::TrayIconBuilder;
@@ -754,8 +776,9 @@ fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "显示 / 隐藏灵动岛", true, None::<&str>)?;
     let report = MenuItem::with_id(app, "report", "报表…", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "设置…", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", "关于…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &report, &settings, &quit])?;
+    let menu = Menu::with_items(app, &[&toggle, &report, &settings, &about, &quit])?;
     TrayIconBuilder::with_id("at-tray")
         .tooltip("AgentTrackerIsland")
         .icon(app.default_window_icon().expect("应用图标").clone())
@@ -778,6 +801,11 @@ fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
             }
             "settings" => {
                 if let Some(w) = app.get_webview_window("settings") {
+                    let _ = (w.show(), w.set_focus());
+                }
+            }
+            "about" => {
+                if let Some(w) = app.get_webview_window("about") {
                     let _ = (w.show(), w.set_focus());
                 }
             }
