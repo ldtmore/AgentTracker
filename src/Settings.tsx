@@ -7,7 +7,8 @@
  * - 反馈：校验错误内联显示在出错行正下方；操作结果用顶部 toast（成功 2.5s 自动消失，
  *   失败常驻直到下一次提示）；凭据/阈值"重启生效"的事实写入行描述，不做打扰式弹提示
  * - Key 回显已存值（2026-09-17 所有者要求，推翻原"不回显"决策）；
- *   清空失焦 = 沿用已存 Key 或自动发现链（env / claude-menu），不写空值覆盖
+ *   凭据来源模式化（2026-09-18）：自动发现 / 手动指定显式二选一，取代原"清空失焦不覆盖"决策——
+ *   手动模式留空失焦 = 未修改（防误清空），清除 Key = 切回"自动发现"（显式写空值回落发现链）
  * - 界面文案一律简体中文标点（2026-09-17 验收建议 3）
  */
 import { useEffect, useRef, useState } from "react";
@@ -112,21 +113,20 @@ function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean
   );
 }
 
-/** 三档分段选择（主题）：点击即切换并全窗口预览 */
-function Segmented({
+/** 分段选择（泛化）：点击即切换，供主题三档 / 凭据来源两档复用 */
+function Segmented<T extends string>({
   value,
   onChange,
+  options,
+  ariaLabel,
 }: {
-  value: ThemeMode;
-  onChange: (v: ThemeMode) => void;
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+  ariaLabel: string;
 }) {
-  const options: { value: ThemeMode; label: string }[] = [
-    { value: "system", label: "跟随系统" },
-    { value: "dark", label: "深色" },
-    { value: "light", label: "浅色" },
-  ];
   return (
-    <div className="st-seg" role="radiogroup" aria-label="主题模式">
+    <div className="st-seg" role="radiogroup" aria-label={ariaLabel}>
       {options.map((o) => (
         <button
           key={o.value}
@@ -179,6 +179,9 @@ export default function Settings() {
   const [glmBase, setGlmBase] = useState("https://open.bigmodel.cn");
   const [glmToken, setGlmToken] = useState(""); // 输入框内容；回显已存 Key（2026-09-17 所有者要求）
   const savedTokenRef = useRef(""); // 最近一次落库的 Key：失焦时比对，未变更不重复落库/提示
+  // 凭据来源模式（2026-09-18 模式化改造）：auto = 自动发现链（env → claude-menu），manual = 手动指定。
+  // 与后端判定同源：glm_token 非空即手动，清空即回落自动，无需独立设置键
+  const [credMode, setCredMode] = useState<"auto" | "manual">("auto");
   const [showToken, setShowToken] = useState(false); // 明文/密文切换
   const [tokenFrom, setTokenFrom] = useState(""); // 已生效凭据来源（聚合器启动时写入）
   const [warn, setWarn] = useState("80");
@@ -223,6 +226,7 @@ export default function Settings() {
         if (s.glm_token) {
           setGlmToken(s.glm_token);
           savedTokenRef.current = s.glm_token;
+          setCredMode("manual"); // 已存 Key = 手动指定模式（与后端"非空即应用设置"判定同源）
         }
         if (s.threshold_warn) setWarn(s.threshold_warn);
         if (s.threshold_danger) setDanger(s.threshold_danger);
@@ -371,7 +375,7 @@ export default function Settings() {
   };
 
   /** API Key 失焦提交：与已存值一致则跳过（防误点失焦重复落库/提示）；
-   *  清空失焦 = 沿用已存 Key 或自动发现链，不写空值覆盖。
+   *  手动模式下留空失焦 = 未修改（防误清空），要清除 Key 请切回"自动发现"模式。
    *  保存成功后输入框保留并回正内容（回显），徽标即时点亮 */
   const commitToken = async () => {
     const t = glmToken.trim();
@@ -382,6 +386,24 @@ export default function Settings() {
       // 重启后聚合器会把徽标改写为实际来源（应用设置）
       setTokenFrom("已保存（重启后生效）");
       showToast("已保存，凭据在重启应用后生效", "ok");
+    }
+  };
+
+  /** 凭据来源切换（2026-09-18 模式化改造）：自动发现 / 手动指定显式二选一；
+   *  切到"自动发现" = 显式清除已存 Key（写空值回落发现链），toast 告知避免静默切换；
+   *  切到"手动指定"只改界面状态，等输入框失焦再落库 */
+  const changeCredMode = async (mode: "auto" | "manual") => {
+    if (mode === credMode) return;
+    setCredMode(mode);
+    if (mode === "auto") {
+      setGlmToken("");
+      savedTokenRef.current = "";
+      if (await saveKey("glm_token", "")) {
+        setTokenFrom("自动发现（重启后生效）");
+        showToast("已切换为自动发现，重启应用后生效", "ok");
+      } else {
+        setCredMode("manual"); // 落库失败回滚界面，避免显示与实际不符
+      }
     }
   };
 
@@ -454,7 +476,16 @@ export default function Settings() {
 
       <Section title="通用" desc="应用主题与系统行为，改动即时生效">
         <Row title="主题" desc="跟随系统时随 Windows 深浅色自动切换（窗口标题栏颜色始终随系统）">
-          <Segmented value={themeMode} onChange={changeTheme} />
+          <Segmented
+            value={themeMode}
+            onChange={changeTheme}
+            ariaLabel="主题模式"
+            options={[
+              { value: "system", label: "跟随系统" },
+              { value: "dark", label: "深色" },
+              { value: "light", label: "浅色" },
+            ]}
+          />
         </Row>
         <Row title="开机自启" desc="登录 Windows 后自动启动并常驻托盘">
           <Switch checked={autoStart} onChange={toggleAutoStart} />
@@ -542,31 +573,48 @@ export default function Settings() {
           </select>
         </Row>
         <Row
-          title="API Key"
-          badge={tokenFrom ? <Badge on text={tokenFrom} /> : <Badge on={false} text="未配置" />}
-          desc="与 Claude Code 的 ANTHROPIC_AUTH_TOKEN 同值，留空则沿用现有配置或自动发现（env / claude-menu）"
-          tall
+          title="凭据来源"
+          badge={tokenFrom ? <Badge on text={tokenFrom} /> : <Badge on={false} text="未发现" />}
+          desc="自动发现顺序：环境变量 → claude-menu；手动指定优先生效，改动在重启应用后生效"
         >
-          <div className="st-token">
-            <input
-              className="st-input"
-              type={showToken ? "text" : "password"}
-              value={glmToken}
-              placeholder="失焦自动保存"
-              onChange={(e) => setGlmToken(e.target.value)}
-              onBlur={commitToken}
-              onKeyDown={blurOnEnter}
-            />
-            <button
-              type="button"
-              className="st-eye"
-              title={showToken ? "隐藏" : "显示"}
-              onClick={() => setShowToken(!showToken)}
-            >
-              <EyeIcon off={!showToken} />
-            </button>
-          </div>
+          <Segmented
+            value={credMode}
+            onChange={changeCredMode}
+            ariaLabel="凭据来源"
+            options={[
+              { value: "auto", label: "自动发现" },
+              { value: "manual", label: "手动指定" },
+            ]}
+          />
         </Row>
+        {/* API Key 行仅在手动指定模式下渲染：自动发现模式下 Key 由发现链提供，输入框无意义 */}
+        {credMode === "manual" && (
+          <Row
+            title="API Key"
+            desc="与 Claude Code 的 ANTHROPIC_AUTH_TOKEN 同值；留空失焦 = 未修改，清除 Key 请切回“自动发现”"
+            tall
+          >
+            <div className="st-token">
+              <input
+                className="st-input"
+                type={showToken ? "text" : "password"}
+                value={glmToken}
+                placeholder="失焦自动保存"
+                onChange={(e) => setGlmToken(e.target.value)}
+                onBlur={commitToken}
+                onKeyDown={blurOnEnter}
+              />
+              <button
+                type="button"
+                className="st-eye"
+                title={showToken ? "隐藏" : "显示"}
+                onClick={() => setShowToken(!showToken)}
+              >
+                <EyeIcon off={!showToken} />
+              </button>
+            </div>
+          </Row>
+        )}
         <Row
           title="额度提醒阈值（%）"
           desc="已用额度达到琥珀阈值开始提醒，达到红色阈值转为告警，重启后生效"
