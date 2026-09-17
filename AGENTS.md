@@ -24,6 +24,7 @@ AgentTrackerIsland（中文名：**智岛**；对外口号：**主流 Agent 状�
 ## 三、工程规范
 
 - 注释、文档、UI 文案一律简体中文（遵循用户全局规范）
+- 中文中不允许夹杂英文标点，统一使用中文标点（，：；！？（）等）；特殊场景除外：代码标识符、URL、路径、SQL/JSON 示例、markdown 链接、Rust 格式化语法（`{:?}`）等代码本身，以及模拟外部系统消息的内容
 - 遵循 Ponytail YAGNI：M0 不做 M1 的事；能用标准库/成熟 crate 就不自研
 - 新增 Agent 支持 = 实现 `AgentAdapter` trait；新增供应商 = 实现 `ProviderAdapter` trait，禁止 if-else 堆砌
 - SQLite 是唯一持久层，Schema 变更必须写迁移脚本，不允许破坏旧数据
