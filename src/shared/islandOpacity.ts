@@ -2,7 +2,8 @@
  * 灵动岛背景不透明度：设置页【灵动岛】节单滑块调基准值（存储键 island_opacity，
  * 0–100 整数字符串），三层背景按固定偏移派生 alpha，视觉层级恒定——
  * 面板永远比胶囊实一档（文字密集，可读性要求更高），
- * 隐藏态比胶囊淡一档（隐藏 = 低调弱化，可见性由不透明的 Agent 身份色块承担）。
+ * 隐藏态比胶囊淡一档（隐藏 = 低调弱化）：edge-alpha 作为 .edge-tab 容器的整体
+ * opacity，底色/身份色块/描边/额度线全部随之一起变淡（App.css 消费）。
  * 应用方式与主题同构：派生 alpha 写根元素 CSS 变量，App.css 以
  * rgba(var(--pill-rgb), var(--pill-alpha)) 形式消费；深浅主题只换 RGB，alpha 通用。
  */
@@ -24,8 +25,8 @@ export const ISLAND_OPACITY_MAX = 100;
 const PANEL_OFFSET = 0.16;
 /** 派生偏移：隐藏态比胶囊淡一档（2026-09-17 定版：反转历史"隐藏态最实"的旧关系） */
 const EDGE_OFFSET = -0.1;
-/** 隐藏态独立下限：缝隙描边与额度发丝线在花哨壁纸上仍可辨 */
-const EDGE_MIN = 0.45;
+/** 隐藏态独立下限：整体（含身份色块与状态暗淡段）在花哨壁纸上仍可辨 */
+const EDGE_MIN = 0.4;
 
 /** 收窄任意值为合法基准：非数字/越界一律钳到区间内（脏数据防御，参照 sanitizeThresholds） */
 export function asIslandOpacity(v: unknown): number {

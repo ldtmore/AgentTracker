@@ -416,7 +416,11 @@ body,
 .edge-tab {
   position: absolute;
   box-sizing: border-box;
-  background: rgba(var(--edge-rgb), var(--edge-alpha));
+  /* 整体不透明度乘在容器上：底色、身份色块、描边、内发光、额度线全部随
+     「背景不透明度」滑块一起变淡（隐藏态作为一个整体弱化，未来新增元素天然跟随）；
+     底色因此用实色，避免"变量 alpha × 容器 opacity"双重衰减 */
+  opacity: var(--edge-alpha);
+  background: rgb(var(--edge-rgb));
   border: 1px solid var(--border-strong);
   display: flex;
   align-items: center;
@@ -567,8 +571,8 @@ body,
 }
 
 .edge-wedge {
-  /* 缝隙描边与隐藏态底色同源同 alpha（视觉上即"缝"），随滑块同步派生 */
-  stroke: rgba(var(--edge-rgb), var(--edge-alpha));
+  /* 缝隙描边与底色同源（视觉上即"缝"），实色即可——随容器整体 opacity 统一变淡 */
+  stroke: rgb(var(--edge-rgb));
   stroke-width: 1;
   transition: opacity 0.3s ease;
 }
