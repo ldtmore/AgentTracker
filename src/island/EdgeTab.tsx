@@ -3,21 +3,23 @@
  * 设计：**颜色 = Agent 身份**（ZC 绿 / CC 橙，新 Agent 从色板稳定分配），
  * 等宽分段（每 Agent 一块，大小不编码信息），状态用亮度/动效表达——
  * 工作中=全亮慢呼吸 / 等待=快闪 / 出错=红圈描边+快闪 / 空闲=45% 暗淡 / 离线=近隐没；
- * 顶部底边与左右半圆外沿均有额度发丝线（长度/弧长 = 5h 已用百分比，颜色随档位）；
- * 悬停色块有提示（名字/状态/token）
+ * 全部会话离线的 Agent 不渲染分段（2026-09-18 E2：暗淡分段会被误读为"有 Agent 在跑"）；
+ * 顶部底边与左右半圆外沿均有额度发丝线（长度/弧长 = 最紧张窗口的已用百分比，
+ * 颜色随档位——E3：不再固定 5h，周窗口更紧张时优先显示周）；
+ * 出错时叠加"！"标记（E4：微 UI 放不下文案，用符号表达异常）。
+ *
+ * ⚠ 本区域明确不做 tooltip（2026-09-18 与用户确认的伪需求，勿再实现）：
+ * 根容器的 onMouseEnter 在鼠标进入隐藏态瞬间触发 island_peek 滑入，
+ * 本组件随即卸载换成胶囊渲染（App.tsx 悬停激活链路）——任何悬停提示
+ * 都没有稳定展示时机。额度与状态详情由滑入后的胶囊 tooltip 承接
  */
 import type { IslandSnapshot, SessionState, Thresholds } from "../shared/types";
-import { agentColor } from "../shared/types";
+import { agentColor, tensestQuota } from "../shared/types";
 import { quotaLevel } from "./IslandBar";
+import { BangIcon } from "../shared/icons";
 
-/** 额度档位 → 弧线颜色（与发丝线/进度条档位色一致） */
-const ARC_STROKE: Record<string, string> = {
-  normal: "#34d399",
-  warn: "#fbbf24",
-  danger: "#f87171",
-};
-
-/** 按 Agent 聚合最严重状态，等宽分段（大小不编码信息） */
+/** 按 Agent 聚合最严重状态，等宽分段（大小不编码信息）；
+ *  全离线 Agent 不占位（E2） */
 function agentSegments(snap: IslandSnapshot | null) {
   if (!snap) return [];
   const severity: Record<string, number> = {
@@ -28,22 +30,17 @@ function agentSegments(snap: IslandSnapshot | null) {
     offline: -1,
   };
   const worst = new Map<string, SessionState>();
-  const tokens = new Map<string, number>();
   for (const s of snap.sessions) {
-    tokens.set(s.agent, (tokens.get(s.agent) ?? 0) + s.session_tokens);
     const cur = worst.get(s.agent);
     if (cur === undefined || (severity[s.state] ?? 0) > (severity[cur] ?? 0)) {
       worst.set(s.agent, s.state);
     }
   }
-  // token 降序（位置 = 用量排名，大者靠前），tooltip 保留 token 详情
+  // 过滤全离线：该 Agent 进程已全部退出，分段不再渲染
   return [...worst.entries()]
-    .map(([agent, state]) => ({
-      agent,
-      state,
-      tokens: tokens.get(agent) ?? 0,
-    }))
-    .sort((a, b) => b.tokens - a.tokens || a.agent.localeCompare(b.agent));
+    .filter(([, state]) => state !== "offline")
+    .map(([agent, state]) => ({ agent, state }))
+    .sort((a, b) => a.agent.localeCompare(b.agent));
 }
 
 export default function EdgeTab({
@@ -59,11 +56,9 @@ export default function EdgeTab({
   const cls = `edge-tab edge-tab-${edge}${error ? " edge-error" : ""}`;
   const segments = agentSegments(snap);
 
-  // 5h 额度：百分比与档位（发丝线/弧线填充用）
-  const q5h = snap?.quotas.find(
-    (q) => q.provider === "glm" && q.window_kind === "5h",
-  );
-  const pct = q5h?.used_percent;
+  // 额度线（E3）：取最紧张窗口（用量百分比最高），而非固定 5h
+  const tense = snap ? tensestQuota(snap.quotas) : null;
+  const pct = tense?.used_percent;
   const level = pct != null ? quotaLevel(pct, thresholds.warn, thresholds.danger) : "normal";
   const pctClamped = pct != null ? Math.min(100, Math.max(0, pct)) : 0;
 
@@ -72,12 +67,19 @@ export default function EdgeTab({
     return (
       <div className={cls} data-tauri-drag-region>
         {segments.map((seg) => (
-          <span
-            key={seg.agent}
-            className={`edge-seg st-${seg.state}`}
-            style={{ background: agentColor(seg.agent) }}
-            data-tauri-drag-region
-          />
+          // 出错分段叠加"！"（E4）：纯色微 UI 上唯一的文字级符号
+          <span key={seg.agent} className="edge-seg-wrap" data-tauri-drag-region>
+            <span
+              className={`edge-seg st-${seg.state}`}
+              style={{ background: agentColor(seg.agent) }}
+              data-tauri-drag-region
+            />
+            {seg.state === "error" && (
+              <span className="edge-bang" data-tauri-drag-region>
+                <BangIcon />
+              </span>
+            )}
+          </span>
         ))}
         {pct != null && (
           <span className="edge-quota-track">
@@ -124,6 +126,10 @@ export default function EdgeTab({
     <div className={cls} data-tauri-drag-region>
       <svg className="edge-svg" viewBox="0 0 20 48" preserveAspectRatio="none">
         {wedges}
+        {error && (
+          // 出错红点（E4）：圆心处常亮红点，与 edge-error 红描边呼应
+          <circle cx={cx} cy={24} r={2.5} className="edge-err-dot" />
+        )}
         {pct != null && (
           <>
             <path d={arcPath} pathLength={100} className="edge-arc-track" />
@@ -140,6 +146,13 @@ export default function EdgeTab({
     </div>
   );
 }
+
+/** 额度档位 → 弧线颜色（与发丝线/进度条档位色一致） */
+const ARC_STROKE: Record<string, string> = {
+  normal: "#34d399",
+  warn: "#fbbf24",
+  danger: "#f87171",
+};
 
 /** 扇形楔形路径：圆心 （cx,cy），椭圆半径 rx/ry，角度 a0→a1（度，-90=正上，顺时针） */
 function wedgePath(

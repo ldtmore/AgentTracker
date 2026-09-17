@@ -293,6 +293,23 @@ async fn report_heatmap(
     run_report(store, move |s| s.report_heatmap(days)).await
 }
 
+/// 显示并聚焦报表窗口（2026-09-18 展示改造：岛面板汇总条的"报表"入口，
+/// 与托盘菜单"报表…"同一条路径；窗口为常驻隐藏窗口，只 show 不重建）
+#[tauri::command]
+fn show_report_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    match app.get_webview_window("report") {
+        Some(w) => {
+            let _ = (w.show(), w.set_focus());
+            Ok(())
+        }
+        None => {
+            log::warn!("[报表] 窗口不存在（未初始化？），入口点击无效果");
+            Err("报表窗口不可用".into())
+        }
+    }
+}
+
 // ===== 贴边自动隐藏 commands（追加需求） =====
 
 /// 岛自适应尺寸（前端挂载时获取，Rust 贴边几何与前端渲染共用同一公式）
@@ -657,6 +674,7 @@ pub fn run() {
             report_by_model,
             report_by_provider,
             report_heatmap,
+            show_report_window,
             island_peek,
             island_refresh,
             island_dock_state,

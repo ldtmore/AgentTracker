@@ -16,7 +16,15 @@ export interface SessionView {
   project_dir: string | null;
   title: string | null;
   state: SessionState;
+  /** 总消耗 = 四项相加（与官方账单同口径，含缓存） */
   session_tokens: number;
+  /** 四项拆解（tooltip 展示用） */
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  /** 最近一次调用出错的类型（仅 state=error 时展示原因） */
+  error_type: string | null;
   last_activity_at: number | null;
 }
 
@@ -42,6 +50,12 @@ export interface IslandSnapshot {
   quota_exhausted: boolean;
   /** 采集源连续失败（2026-09-17 审查新增）：岛收缩态据此提示"采集异常" */
   degraded?: boolean;
+  /** 今日 token 总量（本机今日零点起，账单口径含缓存） */
+  today_tokens: number;
+  /** 今日模型调用次数 */
+  today_calls: number;
+  /** GLM 凭据是否已配置（false 时胶囊展示"额度未配置"而非不展示） */
+  glm_configured: boolean;
   generated_at: number;
 }
 
@@ -99,21 +113,75 @@ export const SESSION_META: Record<SessionState, { dot: string; label: string }> 
   offline: { dot: "dot-gray", label: "离线" },
 };
 
-/** token 数值缩写（K/M） */
+/** token 数值缩写（K/M/B；含缓存后总量可上 G 级） */
 export function fmtTokens(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
   return String(n);
 }
 
-/** 重置时间 → 剩余时长文案 */
-export function fmtCountdown(resetAt: number | null): string {
-  if (resetAt == null) return "--";
+/** 相对时间文案（刚刚/N 分钟前/N 小时前/N 天前），给"空闲/已结束"配上时间量感 */
+export function fmtRelative(ts: number | null): string {
+  if (ts == null) return "";
+  const diff = Date.now() - ts;
+  if (diff < 0) return "刚刚";
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return `${Math.floor(diff / 86_400_000)} 天前`;
+}
+
+/** 错误类型 → 中文原因（error_type 是各 Agent 上报的自由字符串，关键词归大类） */
+export function errorReason(errorType: string | null): string {
+  if (!errorType) return "出错";
+  const e = errorType.toLowerCase();
+  if (e.includes("rate") || e.includes("limit") || e.includes("频率") || e.includes("限流"))
+    return "出错 · 限流";
+  if (e.includes("quota") || e.includes("billing") || e.includes("credit") || e.includes("额度"))
+    return "出错 · 额度/计费";
+  if (e.includes("auth") || e.includes("permission") || e.includes("key"))
+    return "出错 · 鉴权";
+  if (e.includes("timeout") || e.includes("timed") || e.includes("超时")) return "出错 · 超时";
+  if (e.includes("network") || e.includes("connect")) return "出错 · 网络";
+  if (e.includes("overloaded")) return "出错 · 服务过载";
+  return "出错 · API 异常";
+}
+
+/** 额度窗口标签：'5h' → '5h'，'weekly' → '7d'。
+ *  官方定义（docs.bigmodel.cn Coding Plan 用量说明）：周积分为"自套餐下单时起
+ *  以 7 天为一个周期刷新"——是 7 天滚动周期而非自然周，故标 7d 更准确 */
+export function windowLabel(kind: string): string {
+  if (kind === "5h") return "5h";
+  if (kind === "weekly") return "7d";
+  return kind;
+}
+
+/** 中文时长（悬浮提示用，消除"1h48m"类缩写的歧义） */
+export function fmtCountdownCN(resetAt: number | null): string {
+  if (resetAt == null) return "";
   const diff = resetAt - Date.now();
-  if (diff <= 0) return "即将重置";
-  const h = Math.floor(diff / 3_600_000);
-  const m = Math.floor((diff % 3_600_000) / 60_000);
-  if (h >= 24) return `${Math.floor(h / 24)}d${h % 24}h`;
-  if (h > 0) return `${h}h${m}m`;
-  return `${m}m`;
+  if (diff <= 0) return "即将刷新";
+  const m = Math.floor(diff / 60_000);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (d > 0) return `${d} 天 ${h % 24} 小时`;
+  if (h > 0) return `${h} 小时 ${m % 60} 分钟`;
+  return `${m} 分钟`;
+}
+
+/**
+ * 选"最紧张"的额度窗口（2026-09-18 展示改造 C4/E3）：
+ * 用量百分比最高者优先——修掉"5h 刚重置 0% 全绿、周窗口快满却无处可看"的盲区。
+ * 并列时取窗口更短的（先到期的更紧急）。无额度数据返回 null
+ */
+export function tensestQuota(quotas: QuotaView[]): QuotaView | null {
+  const usable = quotas.filter((q) => q.used_percent != null);
+  if (usable.length === 0) return null;
+  return usable.reduce((a, b) => {
+    if (b.used_percent! !== a.used_percent!) {
+      return b.used_percent! > a.used_percent! ? b : a;
+    }
+    return b.window_kind === "5h" ? b : a;
+  });
 }

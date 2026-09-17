@@ -42,6 +42,23 @@ pub struct QuotaRow {
     pub fetched_at: i64,
 }
 
+/// 会话用量四项拆解（2026-09-18 展示改造）：相加即总消耗，与官方账单同口径——
+/// 此前只展示 input+output，不含缓存，导致与任何官方后台数字都对不上
+#[derive(Debug, Clone, Default)]
+pub struct TokenBreakdown {
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+    pub cache_creation: i64,
+}
+
+impl TokenBreakdown {
+    /// 总消耗（四项相加，账单口径）
+    pub fn total(&self) -> i64 {
+        self.input + self.output + self.cache_read + self.cache_creation
+    }
+}
+
 /// 存储句柄：克隆 Arc 后全局共享
 pub struct Store {
     conn: Mutex<Connection>,
@@ -238,8 +255,8 @@ impl Store {
         );
     }
 
-    /// 某会话累计 token（input+output，展示口径）。单会话点查，测试与工具用途；
-    /// 聚合 tick 请用 session_usage_totals 批量版（审查 2.2.2 治理 N+1）
+    /// 某会话累计 token（input+output）。单会话点查，仅供测试与工具用途；
+    /// 展示层走 session_usage_breakdown 批量版（账单口径含缓存，审查 2.2.2 治理 N+1）
     pub fn session_usage_total(&self, session_id: &str) -> i64 {
         let conn = self.lock_conn();
         conn.query_row(
@@ -251,9 +268,13 @@ impl Store {
         .unwrap_or(0)
     }
 
-    /// 批量：一组会话的累计 token（input+output）。一次 GROUP BY 替代每会话一次
-    /// 点查（旧实现 100 会话 = 每 10s 200 次全表扫描，审查 2.2.2）
-    pub fn session_usage_totals(&self, session_ids: &[String]) -> std::collections::HashMap<String, i64> {
+    /// 批量：一组会话的用量四项拆解（2026-09-18 展示改造，替代旧的 input+output
+    /// 单总和版 session_usage_totals）。一次 GROUP BY 替代每会话一次点查
+    /// （审查 2.2.2），前端 tooltip 拆解与总消耗（账单口径）共用本查询
+    pub fn session_usage_breakdown(
+        &self,
+        session_ids: &[String],
+    ) -> std::collections::HashMap<String, TokenBreakdown> {
         let mut out = std::collections::HashMap::new();
         if session_ids.is_empty() {
             return out;
@@ -262,19 +283,88 @@ impl Store {
         // 占位符仅由内部拼接（元素为自产会话 id），无外部输入
         let placeholders = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT session_id, COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0)
+            "SELECT session_id,
+                    COALESCE(SUM(COALESCE(input_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(output_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(cache_read_tokens,0)),0),
+                    COALESCE(SUM(COALESCE(cache_creation_tokens,0)),0)
              FROM usage_records WHERE session_id IN ({placeholders}) GROUP BY session_id"
         );
         let Ok(mut stmt) = conn.prepare(&sql) else {
-            log::warn!("session_usage_totals 查询准备失败");
+            log::warn!("session_usage_breakdown 查询准备失败");
             return out;
         };
         let rows = stmt.query_map(rusqlite::params_from_iter(session_ids.iter()), |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                TokenBreakdown {
+                    input: r.get(1)?,
+                    output: r.get(2)?,
+                    cache_read: r.get(3)?,
+                    cache_creation: r.get(4)?,
+                },
+            ))
         });
         if let Ok(it) = rows {
-            for (sid, total) in it.filter_map(|x| x.ok()) {
-                out.insert(sid, total);
+            for (sid, breakdown) in it.filter_map(|x| x.ok()) {
+                out.insert(sid, breakdown);
+            }
+        }
+        out
+    }
+
+    /// 今日用量汇总（账单口径四项相加）： 本机今日零点之后的 token 总量与调用次数。
+    /// 供胶囊/面板"今日"口径展示（2026-09-18 展示改造，替代误导性的全历史"累计"）
+    pub fn today_usage(&self, day_start_ms: i64) -> (i64, i64) {
+        let conn = self.lock_conn();
+        let result: rusqlite::Result<(i64, i64)> = conn.query_row(
+            "SELECT COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
+                    +COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0)),0),
+                    COUNT(*)
+             FROM usage_records WHERE ts >= ?1",
+            params![day_start_ms],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        );
+        match result {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("today_usage 查询失败（按 0 处理）：{e}");
+                (0, 0)
+            }
+        }
+    }
+
+    /// 批量：每个会话最近一次出错的错误类型与时间（无错误的会话不在结果中）。
+    /// 供面板"出错 · 限流/额度耗尽"等具体原因展示（2026-09-18 展示改造）
+    pub fn latest_session_errors(
+        &self,
+        session_ids: &[String],
+    ) -> std::collections::HashMap<String, (String, i64)> {
+        let mut out = std::collections::HashMap::new();
+        if session_ids.is_empty() {
+            return out;
+        }
+        let conn = self.lock_conn();
+        let placeholders = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        // 与 latest_session_models 同构：窗口函数取每会话最近一条有 error_type 的记录
+        let sql = format!(
+            "SELECT session_id, error_type, ts FROM (
+               SELECT session_id, error_type, ts,
+                      ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts DESC) AS rn
+               FROM usage_records
+               WHERE session_id IN ({placeholders}) AND error_type IS NOT NULL
+             ) WHERE rn = 1"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            log::warn!("latest_session_errors 查询准备失败");
+            return out;
+        };
+        let rows = stmt.query_map(rusqlite::params_from_iter(session_ids.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        });
+        if let Ok(it) = rows {
+            for (sid, err, ts) in it.filter_map(|x| x.ok()) {
+                out.insert(sid, (err, ts));
             }
         }
         out

@@ -35,7 +35,8 @@ const PROBE_INTERVAL_MS: i64 = 30 * 1000;
 /// 连续失败多少轮判定 degraded（10s/轮，3 轮 ≈ 30s：瞬时抖动不闪红）
 const DEGRADE_AFTER_TICKS: u32 = 3;
 
-/// 展示用会话视图（serde 给前端）
+/// 展示用会话视图（serde 给前端）。
+/// 2026-09-18 展示改造：新增四项 token 拆解（账单口径）与最近错误类型
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionView {
     pub id: String,
@@ -44,7 +45,15 @@ pub struct SessionView {
     pub project_dir: Option<String>,
     pub title: Option<String>,
     pub state: SessionState,
+    /// 总消耗 = 四项相加（与官方账单同口径，含缓存）
     pub session_tokens: i64,
+    /// 四项拆解（面板 tooltip 展示输入/输出/缓存读/缓存写）
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+    /// 该会话最近一次调用出错的类型（不限时间窗；前端仅在 state=error 时展示原因）
+    pub error_type: Option<String>,
     pub last_activity_at: Option<i64>,
 }
 
@@ -57,7 +66,9 @@ pub struct QuotaView {
     pub reset_at: Option<i64>,
 }
 
-/// 岛快照：一次 tick 的完整产出
+/// 岛快照：一次 tick 的完整产出。
+/// 2026-09-18 展示改造：新增今日口径（today_*）与额度配置标志（glm_configured，
+/// 供胶囊区分"未配置"与"查询失败"，替代额度段凭空消失）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct IslandSnapshot {
     pub sessions: Vec<SessionView>,
@@ -68,6 +79,12 @@ pub struct IslandSnapshot {
     /// 采集源连续失败（审查 1.1）：前端在收缩态提示"采集异常"，
     /// 与"没有会话"区分开——降级必须可见，不允许静默失明
     pub degraded: bool,
+    /// 今日 token 总量（本机今日零点起，账单口径含缓存）
+    pub today_tokens: i64,
+    /// 今日模型调用次数（本机今日零点起）
+    pub today_calls: i64,
+    /// GLM 凭据是否已配置（false 时前端展示"额度未配置"而非不展示）
+    pub glm_configured: bool,
     pub generated_at: i64,
 }
 
@@ -297,11 +314,12 @@ impl Aggregator {
                 }
             }
 
-            // 批量取本批会话的累计 token 与最近模型（审查 2.2.2:
-            // 替代旧的每会话 2 次点查——100 会话即每 10s 200 次无索引扫描）
+            // 批量取本批会话的用量拆解、最近模型与最近错误（审查 2.2.2:
+            // 批量 GROUP BY/窗口函数替代逐会话点查——100 会话即每 10s 数百次无索引扫描）
             let ids: Vec<String> = info_list.iter().map(|i| i.id.clone()).collect();
-            let totals = self.store.session_usage_totals(&ids);
+            let breakdowns = self.store.session_usage_breakdown(&ids);
             let latest_models = self.store.latest_session_models(&ids);
+            let latest_errors = self.store.latest_session_errors(&ids);
 
             for info in &info_list {
                 let raw_sid = info.id.split_once(':').map(|(_, s)| s).unwrap_or("");
@@ -347,6 +365,8 @@ impl Aggregator {
                     &serde_json::to_string(&state).unwrap_or_default().trim_matches('"').to_string(),
                     None,
                 );
+                // 用量拆解：总消耗 = 四项相加（账单口径，含缓存）
+                let bd = breakdowns.get(&info.id).cloned().unwrap_or_default();
                 views.push(SessionView {
                     id: info.id.clone(),
                     agent: agent_id.to_string(),
@@ -355,7 +375,12 @@ impl Aggregator {
                     project_dir: info.project_dir.clone(),
                     title: info.title.clone(),
                     state,
-                    session_tokens: totals.get(&info.id).copied().unwrap_or(0),
+                    session_tokens: bd.total(),
+                    input_tokens: bd.input,
+                    output_tokens: bd.output,
+                    cache_read_tokens: bd.cache_read,
+                    cache_creation_tokens: bd.cache_creation,
+                    error_type: latest_errors.get(&info.id).map(|(e, _)| e.clone()),
                     last_activity_at: info.last_usage_at,
                 });
             }
@@ -431,15 +456,31 @@ impl Aggregator {
             hook_events_consumed,
             degraded
         );
+        // 今日口径（展示改造 2026-09-18）：本机今日零点起算，给胶囊/面板的
+        // "今日消耗"展示——比全历史"累计"更贴近用户心智
+        let (today_tokens, today_calls) = self.store.today_usage(today_start_ms());
         IslandSnapshot {
             sessions: views,
             island,
             quotas: quota_views,
             quota_exhausted,
             degraded,
+            today_tokens,
+            today_calls,
+            glm_configured: self.glm.is_some(),
             generated_at: now,
         }
     }
+}
+
+/// 本机今日零点的 Unix 毫秒（chrono 本地时区；解析异常兜底为 0 = 全历史口径）
+fn today_start_ms() -> i64 {
+    chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .and_then(|t| t.and_local_timezone(chrono::Local).single())
+        .map(|t| t.timestamp_millis())
+        .unwrap_or(0)
 }
 
 /// 进程枚举：返回 （zcode 活着， claude 活着）。

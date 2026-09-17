@@ -214,17 +214,47 @@ body,
   font-variant-numeric: tabular-nums;
 }
 
+/* 采集异常（C7）：红色警示，比灰字更易被注意到 */
+.island-degraded {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  color: #f87171;
+}
+
+/* 额度未配置/暂不可用（C6）：灰字可见，降级必须可见（宪法红线④） */
+.island-quota.quota-off {
+  color: var(--text-4);
+}
+
+/* 单色 SVG 图标与文字基线对齐（G3） */
+.ico {
+  display: inline-block;
+  vertical-align: -1.5px;
+}
+
+.ico-warn {
+  color: #f87171;
+}
+
 /* ===== 展开面板 ===== */
 
+/* 展开面板容器：高度随内容自适应（不再强制填满窗口），
+   上限由 App.tsx 内联注入（expanded_h − 胶囊 − 间距），
+   超出后由内部会话区收缩出滚动条 */
 .panel-wrap {
-  flex: 1;
+  flex: none;
   margin-top: 6px;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .panel {
   box-sizing: border-box;
-  height: 100%;
+  height: auto; /* 高度由内容决定（窗口高度由 App.tsx 按此内容量调定） */
+  max-height: 100%; /* 被窗口钳制时封顶，会话区转为内部滚动 */
   border-radius: 16px;
   background: rgba(var(--panel-rgb), var(--panel-alpha));
   border: 1px solid var(--border);
@@ -248,9 +278,10 @@ body,
   color: var(--text-4);
 }
 
-/* 会话列表（滚动区） */
+/* 会话列表（滚动区）：内容少时按自然高度（面板随内容收缩），
+   面板被钳制时本区吸收收缩量并出滚动条 */
 .panel-sessions {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
   display: flex;
@@ -274,12 +305,12 @@ body,
   padding: 24px 0;
 }
 
-/* 会话卡片 */
+/* 会话卡片（P3 两行布局）：左列（状态灯+徽标）+ 右主区两行 */
 .card {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   border-radius: 10px;
   background: var(--surface);
   cursor: pointer; /* T10 接入跳转 */
@@ -305,17 +336,27 @@ body,
   padding: 1px 5px;
 }
 
-.card-model {
-  flex: none;
-  font-size: 12px;
-  color: var(--text-2);
+/* 主区：两行（标题行 + 元数据行） */
+.card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.card-project {
+/* 第一行：会话标题（主文案，最亮）+ 状态·时间（右对齐弱色） */
+.card-line1 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.card-title {
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: var(--text-3);
+  color: var(--text-1);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -325,13 +366,173 @@ body,
   flex: none;
   font-size: 11px;
   color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 出错原因（P7）：红字点明"出错 · 限流"等具体原因 */
+.card-state.text-error {
+  color: #f87171;
+}
+
+/* 第二行：模型/项目徽章（带单色图标，区分两个并列文本，P8）+ token（右对齐） */
+.card-line2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--text-4);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-tag .ico {
+  flex: none;
+  opacity: 0.8;
+}
+
+/* 模型名等宽字体：与项目名形成第二重视觉区分 */
+.card-tag:first-child {
+  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  flex: none;
+  max-width: 45%;
+}
+
+.card-tag + .card-tag {
+  flex: 1;
+  min-width: 0;
 }
 
 .card-tokens {
   flex: none;
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 已结束的历史会话（P5）：整体弱化，与活跃卡片拉开层级 */
+.card-ended {
+  opacity: 0.55;
+}
+
+/* 今日汇总条（P1）：面板首行回答"今天整体怎么样" */
+.sum-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 2px 4px;
+}
+
+.sum-text {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sum-text b {
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.sum-link {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  font-size: 11px;
+  color: var(--accent); /* 强调色随主题（浅色下自动换深色版本） */
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+
+.sum-link:hover {
+  background: var(--surface-hover);
+}
+
+/* 历史区折叠头（P2）：一行摘要 + 展开/收起箭头 */
+.history-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: none;
+  padding: 5px 10px;
+  border-radius: 8px;
   font-size: 11px;
   color: var(--text-4);
-  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  text-align: left;
+}
+
+.history-toggle:hover {
+  background: var(--surface-hover);
+  color: var(--text-3);
+}
+
+.chevron {
+  display: inline-block;
+  font-size: 15px; /* 折叠箭头比正文大一号：11px 行内太小，辨识不出"可展开" */
+  line-height: 1;
+  color: var(--text-3);
+  transition: transform 0.15s ease;
+}
+
+.chevron-open {
+  transform: rotate(90deg);
+}
+
+.history-latest {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 自绘悬浮提示（G2，常规窗口内用）：portal 挂 body，深色玻璃风。
+   定位坐标由 Tip 组件按真实尺寸计算；触发元素经 cloneElement 注入事件，
+   不产生包裹层（布局零侵入） */
+.tip {
+  position: fixed; /* 坐标由 Tip 组件按真实尺寸计算（left/top 即最终位置） */
+  max-width: 280px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: rgba(17, 19, 24, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  color: #d1d5db;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.tip-dim {
+  color: #9ca3af;
+}
+
+/* 浅色主题下气泡翻白（双主题通用，同 dot 语义色的处理思路） */
+[data-theme="light"] .tip {
+  background: rgba(255, 255, 255, 0.98);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #374151;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
 }
 
 /* 额度区 */
@@ -344,23 +545,43 @@ body,
   gap: 6px;
 }
 
-.quota-line {
+/* 额度区：单行双窗口（5h / 7d），迷你条平分行宽；重置时间收敛进各自悬浮提示 */
+.quota-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 16px; /* 两侧 chip 与分隔线的总间距（16×2+1px），拉开两组视觉边界 */
+}
+
+/* 两个窗口 chip 平分行宽（Tip 经 cloneElement 注入事件，不产生包裹层） */
+.quota-row > .quota-chip {
+  flex: 1;
+  min-width: 0;
+}
+
+.quota-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.quota-sep {
+  flex: none;
+  width: 1px;
+  height: 14px;
+  background: var(--border);
 }
 
 .quota-label {
   flex: none;
-  width: 44px;
   font-size: 12px;
   color: var(--text-2);
 }
 
 .quota-bar {
   flex: 1;
-  height: 8px;
-  border-radius: 4px;
+  height: 6px;
+  border-radius: 3px;
   background: var(--track);
   overflow: hidden;
 }
@@ -403,14 +624,6 @@ body,
   color: #f87171;
 }
 
-.quota-reset {
-  flex: none;
-  width: 90px;
-  font-size: 11px;
-  color: var(--text-4);
-  font-variant-numeric: tabular-nums;
-}
-
 /* ===== 贴边隐藏态标签（M1-6）：独立微 UI，不是胶囊的截取 ===== */
 
 .edge-tab {
@@ -444,7 +657,7 @@ body,
 }
 
 .edge-tab * {
-  pointer-events: auto; /* 分段条带 tooltip；拖拽经各段自身的 drag-region 属性 */
+  pointer-events: auto; /* 拖拽经各段自身的 drag-region 属性（隐藏态无 tooltip：悬停即滑入，见 EdgeTab.tsx 头注） */
 }
 
 /* 出错：描边 + 内圈红光，不悬停也能感知 */
@@ -492,13 +705,38 @@ body,
 
 /* ===== Agent 占比分段：颜色 = 身份（内联注入），状态用亮度/动效表达 ===== */
 
-/* 顶部横条：等宽分段，撑满隐藏态高度 */
-.edge-seg {
+/* 顶部横条：等宽分段，撑满隐藏态高度。
+   seg-wrap 包裹层保持等宽布局，出错"！"叠加在其上不参与伸缩 */
+.edge-seg-wrap {
   flex: 1 1 0;
   min-width: 18px;
   align-self: stretch;
+  display: flex;
+  position: relative;
+}
+
+.edge-seg {
+  flex: 1 1 0;
+  align-self: stretch;
   overflow: hidden;
   transition: opacity 0.3s ease;
+}
+
+/* 出错分段叠加"！"（E4）：微 UI 放不下文案，用符号表达异常 */
+.edge-bang {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+}
+
+.edge-bang .ico {
+  width: 9px;
+  height: 9px;
+  stroke-width: 3;
 }
 
 /* 工作中：全亮 + 慢呼吸（4s/起伏 15%，保留"活着"暗示且不抢注意力） */
@@ -563,7 +801,7 @@ body,
   border-radius: 0 1px 1px 0;
 }
 
-/* 左右贴边：SVG 扇形楔形（从圆心辐射等角切分；区域小不放文字，悬停有提示）。
+/* 左右贴边：SVG 扇形楔形（从圆心辐射等角切分；区域小不放文字，详情由滑入后的胶囊承接）。
    与顶部同一套状态语言：亮度/动效表达状态，颜色只表身份。
    独立类名：HTML 条的盒模型样式不可作用到 SVG 元素（否则 Chromium 不渲染） */
 .edge-tab .edge-svg {
@@ -598,6 +836,11 @@ body,
 
 .edge-wedge.st-offline {
   opacity: 0.18;
+}
+
+/* 出错红点（E4）：圆心常亮红点，与 edge-error 红描边呼应（左右贴边形态） */
+.edge-err-dot {
+  fill: #f87171;
 }
 
 /* 左右贴边：额度进度沿半圆外沿的弧线绘制（SVG 描边，弧长 ∝ 已用百分比）。

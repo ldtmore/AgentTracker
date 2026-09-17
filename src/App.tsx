@@ -35,6 +35,11 @@ interface IslandMetrics {
 }
 const DEFAULT_METRICS: IslandMetrics = { width: 360, collapsed_h: 48, expanded_h: 520 };
 
+/** 面板与胶囊的间距（与 App.css .panel-wrap 的 margin-top 保持一致） */
+const PANEL_GAP_PX = 6;
+/** 展开态窗口高度下限：空会话时骨架（汇总条+标题+空态+额度区）仍完整可用的最小高度 */
+const MIN_EXPANDED_H = 240;
+
 /** 阈值默认值与脏数据防御（R5：设置页可配，启动时加载一次，重启生效） */
 const DEFAULT_THRESHOLDS: Thresholds = { warn: 80, danger: 95 };
 
@@ -51,6 +56,10 @@ function IslandApp() {
   useTheme();
   const [snap, setSnap] = useState<IslandSnapshot | null>(null);
   const [expanded, setExpanded] = useState(false);
+  // 面板内容自然高度（Panel 上报）：展开高度自适应的依据，null = 未测得
+  const [panelH, setPanelH] = useState<number | null>(null);
+  // 上次实际下发的窗口高度（防循环护栏：观察器→setSize→resize→观察器）
+  const lastSetH = useRef<number>(0);
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
   // 贴边状态（Rust 端 island-dock 事件推送）：edge=none/top/left/right,hidden=是否滑出隐藏
   const [dock, setDock] = useState<{ edge: string; hidden: boolean }>({
@@ -191,15 +200,30 @@ function IslandApp() {
     };
   }, []);
 
-  // hover 展开/收起：仅调高度；失败不致命（尺寸权限缺失时内容被裁剪但不崩溃）
+  // 展开/收起：仅调高度；失败不致命（尺寸权限缺失时内容被裁剪但不崩溃）。
+  // 展开高度按面板内容自适应（2026-09-18 展示改造）：
+  //   目标 = 胶囊 + 间距 + 面板自然高度，上限 expanded_h（超出面板内部滚动），
+  //   下限 MIN_EXPANDED_H；未测得前回退 expanded_h（与历史行为一致，避免闪缩）。
+  // 窗口必须跟随内容收缩：岛常驻顶层，若只缩内容不缩窗口，
+  // 下方透明区域会拦截鼠标、挡住下层应用点击
   useEffect(() => {
+    if (!expanded && panelH != null) setPanelH(null); // 收起后清测量值，下次展开重新上报
     const win = getCurrentWebviewWindow();
+    const target = expanded
+      ? Math.min(
+          metrics.expanded_h,
+          Math.max(
+            MIN_EXPANDED_H,
+            metrics.collapsed_h + PANEL_GAP_PX + (panelH ?? metrics.expanded_h),
+          ),
+        )
+      : metrics.collapsed_h;
+    if (target === lastSetH.current) return; // 目标不变不重下发，断开反馈环
+    lastSetH.current = target;
     win
-      .setSize(
-        new LogicalSize(metrics.width, expanded ? metrics.expanded_h : metrics.collapsed_h),
-      )
+      .setSize(new LogicalSize(metrics.width, target))
       .catch(() => {});
-  }, [expanded, metrics]);
+  }, [expanded, metrics, panelH]);
 
   // 进入贴边隐藏态时自动收起面板（Rust 已把窗口缩回收缩态，保持渲染一致）
   useEffect(() => {
@@ -251,8 +275,11 @@ function IslandApp() {
             onToggle={hoverCard ? undefined : () => setExpanded((v) => !v)}
           />
           {expanded && visibleSnap && (
-            <div className="panel-wrap">
-              <Panel snap={visibleSnap} thresholds={thresholds} />
+            <div
+              className="panel-wrap"
+              style={{ maxHeight: metrics.expanded_h - metrics.collapsed_h - PANEL_GAP_PX }}
+            >
+              <Panel snap={visibleSnap} thresholds={thresholds} onNaturalHeight={setPanelH} />
             </div>
           )}
         </>
