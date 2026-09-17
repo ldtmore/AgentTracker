@@ -1,14 +1,17 @@
 //! 本地存储层:AgentTrackerIsland 自库(SQLite)的打开/迁移/读写封装。
 //! 设计依据 docs/02-DESIGN.md §3;红线③(顺序无关)由幂等键与水位保证。
 //! 线程模型:Connection 非 Sync,用 Mutex 包裹,单写多读经同一锁串行(M0 规模足够)。
+//! 锁策略:中毒后自恢复(审查 1.1)——单次 panic 不应让后续所有调用连锁失败。
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// 初始化迁移脚本(0001)
 const MIGRATION_0001: &str = include_str!("migrations/0001_init.sql");
+/// 0002:用量表会话索引(会话级批量聚合加速)+ 移除从未使用的 watermarks.last_offset 列
+const MIGRATION_0002: &str = include_str!("migrations/0002_indexes.sql");
 
 /// 一条 token 用量流水(来自任一 Agent 适配器的增量采集)
 #[derive(Debug, Clone)]
@@ -54,22 +57,34 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         Self::migrate(&conn)?;
+        // SQLite 官方建议周期性执行:优化查询规划器统计(开销极小)
+        let _ = conn.execute_batch("PRAGMA optimize;");
         Ok(Self { conn: Mutex::new(conn) })
     }
 
-    /// 迁移:按 user_version 顺序执行(M0 仅 0001,后续版本递增)
+    /// 迁移:按 user_version 顺序执行(0001 建库,0002 索引,后续版本递增)
     fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         let ver: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if ver < 1 {
             conn.execute_batch(MIGRATION_0001)?;
             conn.pragma_update(None, "user_version", 1)?;
         }
+        if ver < 2 {
+            conn.execute_batch(MIGRATION_0002)?;
+            conn.pragma_update(None, "user_version", 2)?;
+        }
         Ok(())
+    }
+
+    /// 取连接:Mutex 中毒后直接恢复内容继续用(Connection 内容在事务边界始终一致,
+    /// 单次 panic 不应放大为全应用连锁失败——审查 1.1)
+    fn lock_conn(&self) -> MutexGuard<'_, Connection> {
+        self.conn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// 读取某 Agent 的采集水位(时间戳,毫秒);无记录返回 0
     pub fn get_watermark(&self, agent: &str) -> i64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(
             "SELECT last_ts FROM watermarks WHERE agent = ?1",
             params![agent],
@@ -83,7 +98,7 @@ impl Store {
 
     /// 更新采集水位(仅前进,不回退)
     pub fn set_watermark(&self, agent: &str, ts: i64) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let _ = conn.execute(
             "INSERT INTO watermarks(agent, last_ts) VALUES(?1, ?2)
              ON CONFLICT(agent) DO UPDATE SET last_ts = MAX(last_ts, excluded.last_ts)",
@@ -105,7 +120,7 @@ impl Store {
         state: &str,
         state_reason: Option<&str>,
     ) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let _ = conn.execute(
             "INSERT INTO sessions(id, agent, provider, model, project_dir, title,
                                   first_seen_at, last_seen_at, state, state_reason)
@@ -125,51 +140,62 @@ impl Store {
     /// 幂等插入用量流水:同幂等键(agent+session+ts+model)冲突时,仅当新行四项
     /// 用量合计更大才整行覆盖——与 Claude Code"同消息保留最大快照"口径一致,
     /// 跨 tick 重采到更完整的流式快照时能原地升级而非被 INSERT OR IGNORE 顶掉;
-    /// 返回实际变更行数(新插入或覆盖)
+    /// 返回实际变更行数(新插入或覆盖)。
+    /// 事务/写失败不再 panic(审查 1.1):记日志返回 0,等下一轮重采
     pub fn insert_usage(&self, rows: &[UsageRow]) -> usize {
-        let mut conn = self.conn.lock().unwrap();
-        let tx = conn.transaction().unwrap();
+        let mut conn = self.lock_conn();
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("insert_usage 开启事务失败(本轮 {} 行放弃,下轮重采): {e}", rows.len());
+                return 0;
+            }
+        };
         let mut changed = 0usize;
         for r in rows {
-            let n = tx
-                .execute(
-                    "INSERT INTO usage_records(
-                       session_id, agent, model, provider, ts,
-                       input_tokens, output_tokens, reasoning_tokens,
-                       cache_read_tokens, cache_creation_tokens,
-                       duration_ms, ttft_ms, error_type)
-                     VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
-                     ON CONFLICT(agent, session_id, ts, model) DO UPDATE SET
-                       input_tokens = excluded.input_tokens,
-                       output_tokens = excluded.output_tokens,
-                       reasoning_tokens = excluded.reasoning_tokens,
-                       cache_read_tokens = excluded.cache_read_tokens,
-                       cache_creation_tokens = excluded.cache_creation_tokens,
-                       duration_ms = excluded.duration_ms,
-                       ttft_ms = excluded.ttft_ms,
-                       error_type = excluded.error_type
-                     WHERE (COALESCE(excluded.input_tokens,0) + COALESCE(excluded.output_tokens,0)
-                          + COALESCE(excluded.cache_read_tokens,0) + COALESCE(excluded.cache_creation_tokens,0))
-                           >
-                           (COALESCE(input_tokens,0) + COALESCE(output_tokens,0)
-                          + COALESCE(cache_read_tokens,0) + COALESCE(cache_creation_tokens,0))",
-                    params![
-                        r.session_id, r.agent, r.model, r.provider, r.ts,
-                        r.input_tokens, r.output_tokens, r.reasoning_tokens,
-                        r.cache_read_tokens, r.cache_creation_tokens,
-                        r.duration_ms, r.ttft_ms, r.error_type
-                    ],
-                )
-                .unwrap_or(0);
-            changed += n;
+            let n = tx.execute(
+                "INSERT INTO usage_records(
+                   session_id, agent, model, provider, ts,
+                   input_tokens, output_tokens, reasoning_tokens,
+                   cache_read_tokens, cache_creation_tokens,
+                   duration_ms, ttft_ms, error_type)
+                 VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
+                 ON CONFLICT(agent, session_id, ts, model) DO UPDATE SET
+                   input_tokens = excluded.input_tokens,
+                   output_tokens = excluded.output_tokens,
+                   reasoning_tokens = excluded.reasoning_tokens,
+                   cache_read_tokens = excluded.cache_read_tokens,
+                   cache_creation_tokens = excluded.cache_creation_tokens,
+                   duration_ms = excluded.duration_ms,
+                   ttft_ms = excluded.ttft_ms,
+                   error_type = excluded.error_type
+                 WHERE (COALESCE(excluded.input_tokens,0) + COALESCE(excluded.output_tokens,0)
+                      + COALESCE(excluded.cache_read_tokens,0) + COALESCE(excluded.cache_creation_tokens,0))
+                       >
+                       (COALESCE(input_tokens,0) + COALESCE(output_tokens,0)
+                      + COALESCE(cache_read_tokens,0) + COALESCE(cache_creation_tokens,0))",
+                params![
+                    r.session_id, r.agent, r.model, r.provider, r.ts,
+                    r.input_tokens, r.output_tokens, r.reasoning_tokens,
+                    r.cache_read_tokens, r.cache_creation_tokens,
+                    r.duration_ms, r.ttft_ms, r.error_type
+                ],
+            );
+            match n {
+                Ok(v) => changed += v,
+                Err(e) => log::warn!("insert_usage 单行写库失败(ts={} model={}): {e}", r.ts, r.model),
+            }
         }
-        tx.commit().unwrap();
+        if let Err(e) = tx.commit() {
+            log::warn!("insert_usage 提交事务失败(本轮全部回滚,下轮重采): {e}");
+            return 0;
+        }
         changed
     }
 
     /// 插入额度快照
     pub fn insert_quota(&self, row: &QuotaRow) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let _ = conn.execute(
             "INSERT INTO quota_snapshots(provider, window_kind, used_percent, used_tokens, reset_at, fetched_at)
              VALUES(?1,?2,?3,?4,?5,?6)",
@@ -179,7 +205,7 @@ impl Store {
 
     /// 插入原始状态事件(hooks/采集审计)
     pub fn insert_status_event(&self, agent: &str, session_id: Option<&str>, hook: &str, payload: &str, ts: i64) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let _ = conn.execute(
             "INSERT INTO status_events(agent, session_id, hook, payload, ts) VALUES(?1,?2,?3,?4,?5)",
             params![agent, session_id, hook, payload, ts],
@@ -188,7 +214,7 @@ impl Store {
 
     /// 设置项读写
     pub fn get_setting(&self, key: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row("SELECT value FROM app_settings WHERE key = ?1", params![key], |r| r.get(0))
             .optional()
             .ok()
@@ -196,7 +222,7 @@ impl Store {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let _ = conn.execute(
             "INSERT INTO app_settings(key, value) VALUES(?1,?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -204,9 +230,10 @@ impl Store {
         );
     }
 
-    /// 某会话的累计 token(input+output,展示口径)
+    /// 某会话累计 token(input+output,展示口径)。单会话点查,测试与工具用途;
+    /// 聚合 tick 请用 session_usage_totals 批量版(审查 2.2.2 治理 N+1)
     pub fn session_usage_total(&self, session_id: &str) -> i64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(
             "SELECT COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0)
              FROM usage_records WHERE session_id = ?1",
@@ -216,9 +243,69 @@ impl Store {
         .unwrap_or(0)
     }
 
+    /// 批量:一组会话的累计 token(input+output)。一次 GROUP BY 替代每会话一次
+    /// 点查(旧实现 100 会话 = 每 10s 200 次全表扫描,审查 2.2.2)
+    pub fn session_usage_totals(&self, session_ids: &[String]) -> std::collections::HashMap<String, i64> {
+        let mut out = std::collections::HashMap::new();
+        if session_ids.is_empty() {
+            return out;
+        }
+        let conn = self.lock_conn();
+        // 占位符仅由内部拼接(元素为自产会话 id),无外部输入
+        let placeholders = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT session_id, COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0)
+             FROM usage_records WHERE session_id IN ({placeholders}) GROUP BY session_id"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            log::warn!("session_usage_totals 查询准备失败");
+            return out;
+        };
+        let rows = stmt.query_map(rusqlite::params_from_iter(session_ids.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        });
+        if let Ok(it) = rows {
+            for (sid, total) in it.filter_map(|x| x.ok()) {
+                out.insert(sid, total);
+            }
+        }
+        out
+    }
+
+    /// 批量:每个会话最近一次调用所用模型(Claude Code scan 阶段拿不到 model,
+    /// 展示时兜底回填)。窗口函数取每会话 ts 最大一行,替代逐会话点查(审查 2.2.2)
+    pub fn latest_session_models(&self, session_ids: &[String]) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        if session_ids.is_empty() {
+            return out;
+        }
+        let conn = self.lock_conn();
+        let placeholders = session_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT session_id, model FROM (
+               SELECT session_id, model,
+                      ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts DESC) AS rn
+               FROM usage_records WHERE session_id IN ({placeholders})
+             ) WHERE rn = 1"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            log::warn!("latest_session_models 查询准备失败");
+            return out;
+        };
+        let rows = stmt.query_map(rusqlite::params_from_iter(session_ids.iter()), |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        });
+        if let Ok(it) = rows {
+            for (sid, model) in it.filter_map(|x| x.ok()) {
+                out.insert(sid, model);
+            }
+        }
+        out
+    }
+
     /// 每个供应商+窗口的最新额度快照
     pub fn latest_quotas(&self) -> Vec<QuotaRow> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut stmt = match conn.prepare(
             "SELECT provider, window_kind, used_percent, used_tokens, reset_at, fetched_at
              FROM quota_snapshots q
@@ -244,22 +331,9 @@ impl Store {
         }
     }
 
-    /// 某会话最近一次调用所用模型(Claude Code 的 scan 阶段拿不到 model,展示时兜底回填)
-    pub fn latest_session_model(&self, session_id: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row(
-            "SELECT model FROM usage_records WHERE session_id = ?1 ORDER BY ts DESC LIMIT 1",
-            params![session_id],
-            |r| r.get(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-    }
-
     /// 查会话元数据(project_dir/agent),跳转窗口用
     pub fn get_session_meta(&self, id: &str) -> Option<(String, Option<String>)> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         conn.query_row(
             "SELECT agent, project_dir FROM sessions WHERE id = ?1",
             params![id],
@@ -272,7 +346,7 @@ impl Store {
 
     /// 读取全部设置(设置页展示)
     pub fn all_settings(&self) -> std::collections::HashMap<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare("SELECT key, value FROM app_settings") else {
             return std::collections::HashMap::new();
         };
@@ -285,7 +359,7 @@ impl Store {
 
     /// 数据清理:删除 before_ts 之前的用量/快照/事件(设置页滚动周期用)
     pub fn cleanup_older_than(&self, before_ts: i64) -> u64 {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let mut total = 0usize;
         for sql in [
             "DELETE FROM usage_records WHERE ts < ?1",
@@ -339,7 +413,7 @@ fn range_cutoff(days: i64) -> i64 {
 impl Store {
     /// 报表:按日聚合,四项用量分列(趋势图堆叠用)
     pub fn report_daily(&self, days: i64) -> Vec<DayUsage> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(
             "SELECT date(ts/1000,'unixepoch','localtime') AS d,
                     SUM(COALESCE(input_tokens,0)), SUM(COALESCE(output_tokens,0)),
@@ -373,12 +447,21 @@ impl Store {
         self.report_slice(days, "provider")
     }
 
-    /// 报表:按维度聚合内部实现(label_expr 仅允许内部传入列名,不接外部输入)。
+    /// 报表:按维度聚合内部实现(审查 3.3:两份静态 SQL 取代 format! 拼列名,
+    /// 从"约定只传内部常量"升级为"结构上不可能注入")
     /// 模型名按小写归一(本机历史数据存在 GLM-5.3/glm-5.3 大小写混用,避免切成两块)
     fn report_slice(&self, days: i64, label_expr: &str) -> Vec<SliceUsage> {
-        let conn = self.conn.lock().unwrap();
+        let group_expr = match label_expr {
+            "model" => "LOWER(model)",
+            "provider" => "COALESCE(provider,'unknown')",
+            other => {
+                log::warn!("report_slice 收到未知维度 {other},拒绝执行");
+                return vec![];
+            }
+        };
+        let conn = self.lock_conn();
         let sql = format!(
-            "SELECT COALESCE(LOWER({label_expr}),'unknown') AS label,
+            "SELECT {group_expr} AS label,
                     SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)
                        +COALESCE(cache_read_tokens,0)+COALESCE(cache_creation_tokens,0)) AS total
              FROM usage_records WHERE ts >= ?1 GROUP BY label ORDER BY total DESC"
@@ -400,7 +483,7 @@ impl Store {
 
     /// 报表:星期×小时用量热力图(本机时区)
     pub fn report_heatmap(&self, days: i64) -> Vec<HeatCell> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn();
         let Ok(mut stmt) = conn.prepare(
             "SELECT CAST(strftime('%w', ts/1000,'unixepoch','localtime') AS INTEGER),
                     CAST(strftime('%H', ts/1000,'unixepoch','localtime') AS INTEGER),

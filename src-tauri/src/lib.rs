@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 pub mod commands;
 pub mod collector;
+pub mod logging;
 pub mod provider;
 pub mod state;
 pub mod store;
@@ -52,13 +53,18 @@ struct IslandMotion {
     pending: Option<(std::time::Instant, i32, i32)>,
     /// 程序化滑动(吸附/隐藏/显示)的目标落点:用于识别并消费动画自己产生的 Moved 事件
     programmed: Option<(i32, i32)>,
-    /// 滑动动画进行中(期间产生的 Moved 事件全部忽略,防止自触发循环)
-    animating: bool,
+    /// 滑动动画进行中:开始时刻 + 落点。Moved 事件消费落点即结束;
+    /// 落点事件意外丢失时按超时自复位,防"动画标记永久卡死"(审查 3.7:
+    /// 由独立的兜底线程改为时间戳判定,少一个短命线程)
+    animating: Option<(std::time::Instant, (i32, i32))>,
     /// 当前贴靠边:"none" | "top" | "left" | "right"
     edge: String,
     /// 是否处于滑出隐藏态
     hidden: bool,
 }
+
+/// 动画标记超时:超过该时长仍未等到落点 Moved 事件则自复位(正常动画约 130~200ms)
+const ANIM_TIMEOUT_MS: u128 = 400;
 
 /// 滑动动画代数:每次新滑动/用户拖拽都递增,使旧动画线程自行退出
 static SLIDE_GEN: AtomicU64 = AtomicU64::new(0);
@@ -76,16 +82,42 @@ fn focus_session(session_id: String, store: tauri::State<'_, Arc<Store>>) -> boo
 
 // ===== 设置页 commands(T11) =====
 
-/// 读取全部设置(键值对;key 类敏感值原样返回——本地单用户工具,无多用户泄露面)
+/// 允许前端写入的设置键白名单(审查 2.1.3):防止任意键写入
+/// (如覆盖 hook_events_offset/island_pos 等内部状态键)
+const SETTING_KEYS_ALLOW: &[&str] = &[
+    "glm_base",
+    "glm_token",
+    "threshold_warn",
+    "threshold_danger",
+    "cleanup_days",
+    "island_autohide",
+    "hover_expand",
+    "agents_enabled",
+    "agent_colors",
+    "theme",
+];
+
+/// 读取全部设置。
+/// 敏感值不下发前端(审查 2.1.2):glm_token 以 glm_token_set 布尔位代替,
+/// 设置页与聚合器各自经 Rust 侧读写真实值,三个 WebView 均拿不到明文 key
 #[tauri::command]
 fn get_settings(store: tauri::State<'_, Arc<Store>>) -> std::collections::HashMap<String, String> {
-    store.all_settings()
+    let mut all = store.all_settings();
+    if let Some(token) = all.remove("glm_token") {
+        all.insert("glm_token_set".into(), (!token.is_empty()).to_string());
+    }
+    all
 }
 
-/// 写单条设置
+/// 写单条设置(白名单外的键拒绝并报错,前端会显示"保存失败")
 #[tauri::command]
-fn set_setting(key: String, value: String, store: tauri::State<'_, Arc<Store>>) {
+fn set_setting(key: String, value: String, store: tauri::State<'_, Arc<Store>>) -> Result<(), String> {
+    if !SETTING_KEYS_ALLOW.contains(&key.as_str()) {
+        log::warn!("拒绝写入未登记的设置键: {key}");
+        return Err(format!("不允许写入设置键:{key}"));
+    }
     store.set_setting(&key, &value);
+    Ok(())
 }
 
 /// hooks 安装状态(检查 settings.json 中是否存在自家注入条目)
@@ -94,14 +126,15 @@ fn hooks_status() -> bool {
     collector::claude_code::hooks_installed()
 }
 
-/// 安装 hooks(增强档:精确状态)
-#[tauri::command]
+/// 安装 hooks(增强档:精确状态)。
+/// async 标记:文件 IO 移出主线程,不阻塞事件循环(Tauri 语义,审查 2.2.1)
+#[tauri::command(async)]
 fn install_hooks() -> Result<usize, String> {
     collector::claude_code::install_hooks().map_err(|e| e.to_string())
 }
 
-/// 卸载 hooks(还原 settings.json)
-#[tauri::command]
+/// 卸载 hooks(还原 settings.json);async 标记理由同上
+#[tauri::command(async)]
 fn uninstall_hooks() -> Result<usize, String> {
     collector::claude_code::uninstall_hooks().map_err(|e| e.to_string())
 }
@@ -128,29 +161,57 @@ fn autostart_set(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
 }
 
 // ===== 报表 commands(M1-1) =====
+// 报表聚合是重查询(审查 2.2.1:Tauri 同步 command 在主线程执行,"全部"范围
+// 大数据量时会冻结包括岛在内的全部窗口)——统一走 spawn_blocking 挪到线程池
+
+/// 报表查询公共壳:State 不能跨线程移动,先克隆 Arc 再进阻塞线程池
+async fn run_report<T>(
+    store: tauri::State<'_, Arc<Store>>,
+    query: impl FnOnce(&Store) -> Vec<T> + Send + 'static,
+) -> Result<Vec<T>, String>
+where
+    T: Send + 'static,
+{
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || query(&store))
+        .await
+        .map_err(|e| format!("报表查询任务失败: {e}"))
+}
 
 /// 报表:按日聚合用量(days<=0 表示全部历史,下同)
 #[tauri::command]
-fn report_daily(days: i64, store: tauri::State<'_, Arc<Store>>) -> Vec<store::DayUsage> {
-    store.report_daily(days)
+async fn report_daily(
+    days: i64,
+    store: tauri::State<'_, Arc<Store>>,
+) -> Result<Vec<store::DayUsage>, String> {
+    run_report(store, move |s| s.report_daily(days)).await
 }
 
 /// 报表:按模型聚合
 #[tauri::command]
-fn report_by_model(days: i64, store: tauri::State<'_, Arc<Store>>) -> Vec<store::SliceUsage> {
-    store.report_by_model(days)
+async fn report_by_model(
+    days: i64,
+    store: tauri::State<'_, Arc<Store>>,
+) -> Result<Vec<store::SliceUsage>, String> {
+    run_report(store, move |s| s.report_by_model(days)).await
 }
 
 /// 报表:按供应商聚合
 #[tauri::command]
-fn report_by_provider(days: i64, store: tauri::State<'_, Arc<Store>>) -> Vec<store::SliceUsage> {
-    store.report_by_provider(days)
+async fn report_by_provider(
+    days: i64,
+    store: tauri::State<'_, Arc<Store>>,
+) -> Result<Vec<store::SliceUsage>, String> {
+    run_report(store, move |s| s.report_by_provider(days)).await
 }
 
 /// 报表:星期×小时热力图
 #[tauri::command]
-fn report_heatmap(days: i64, store: tauri::State<'_, Arc<Store>>) -> Vec<store::HeatCell> {
-    store.report_heatmap(days)
+async fn report_heatmap(
+    days: i64,
+    store: tauri::State<'_, Arc<Store>>,
+) -> Result<Vec<store::HeatCell>, String> {
+    run_report(store, move |s| s.report_heatmap(days)).await
 }
 
 // ===== 贴边自动隐藏 commands(追加需求) =====
@@ -220,7 +281,7 @@ fn island_refresh(
 fn island_drag_start(motion: tauri::State<'_, Arc<Mutex<IslandMotion>>>) {
     SLIDE_GEN.fetch_add(1, Ordering::Relaxed);
     let mut m = motion.lock().unwrap();
-    m.animating = false;
+    m.animating = None;
     m.programmed = None;
     m.pending = None;
 }
@@ -312,7 +373,8 @@ fn hidden_pos(
 
 /// 程序化滑动窗口到位(to 为逻辑坐标;steps=1 即瞬时跳变;8~10 步约 130~200ms 动效)。
 /// 动画期间产生的 Moved 事件由 IslandMotion.animating 屏蔽,落点由 programmed 消费,
-/// 防止"移动 → Moved → 再评估 → 再移动"的自触发循环
+/// 防止"移动 → Moved → 再评估 → 再移动"的自触发循环;落点事件意外丢失时
+/// 由 Moved 处理器按超时自复位(审查 3.7:去掉独立兜底线程)
 fn slide_to(
     win: &tauri::WebviewWindow,
     to: (i32, i32),
@@ -331,11 +393,10 @@ fn slide_to(
     let gen = SLIDE_GEN.fetch_add(1, Ordering::Relaxed) + 1;
     {
         let mut m = motion.lock().unwrap();
-        m.animating = true;
+        m.animating = Some((std::time::Instant::now(), to_phys));
         m.programmed = Some(to_phys);
     }
     let win = win.clone();
-    let motion2 = motion.clone();
     std::thread::spawn(move || {
         let steps = steps.max(1);
         for i in 1..=steps {
@@ -349,15 +410,6 @@ fn slide_to(
             let _ = win.set_position(tauri::PhysicalPosition::new(phys.0, phys.1));
             std::thread::sleep(Duration::from_millis(16));
         }
-        // 兜底防卡死:若落点 Moved 事件未如期消费,延时后复位动画标记
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(300));
-            let mut m = motion2.lock().unwrap();
-            if m.programmed == Some(to_phys) {
-                m.animating = false;
-                m.programmed = None;
-            }
-        });
     });
 }
 
@@ -476,13 +528,15 @@ fn apply_snap(
 /// 左键是否按住(拖拽进行中不评估贴靠,防止拖到半路被吸附走)
 fn lbutton_down() -> bool {
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+    // SAFETY:GetAsyncKeyState 仅查询系统全局按键状态,无指针/生命周期风险;
+    // 返回值短时置位语义与本用途(按住检测)兼容
     unsafe { GetAsyncKeyState(VK_LBUTTON.0.into()) as u16 & 0x8000 != 0 }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+        // (2026-09-17 审查 3.1)tauri-plugin-opener 全项目零引用,已随依赖移除
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -511,6 +565,10 @@ pub fn run() {
             std::fs::create_dir_all(&dir)?;
             let store = Arc::new(Store::open(&dir.join("agenttrackerisland.db"))?);
             app.manage(store.clone());
+
+            // 日志与 panic 钩子(审查 1.1):一切降级/异常必须留痕可查
+            logging::init(&dir.join("logs"));
+            logging::install_panic_hook();
 
             let win = app
                 .get_webview_window(ISLAND)
@@ -541,13 +599,17 @@ pub fn run() {
                         return;
                     };
                     let mut m = motion2.lock().unwrap();
-                    if m.animating {
+                    if let Some((since, target)) = m.animating {
                         // 动画产生的移动:仅当到达落点时消费并结算动画
-                        if m.programmed == Some((pos.x, pos.y)) {
-                            m.animating = false;
+                        if (pos.x, pos.y) == target {
+                            m.animating = None;
                             m.programmed = None;
                             drop(m);
                             SLIDE_GEN.fetch_add(1, Ordering::Relaxed);
+                        } else if since.elapsed().as_millis() > ANIM_TIMEOUT_MS {
+                            // 落点事件意外丢失:超时自复位,防止动画标记永久卡死
+                            m.animating = None;
+                            m.programmed = None;
                         }
                         return;
                     }
@@ -624,17 +686,19 @@ pub fn run() {
 
             build_tray(app)?;
 
-            // 数据清理:按设置周期启动时执行一次(永不=跳过)
-            if let Some(days) = store
+            // 数据清理:按设置周期启动时执行一次(0=永不;未设置默认保留 1 年,
+            // 审查 3.8:status_events 每工具调用一条,永不清理会让库无限膨胀)
+            let cleanup_days = store
                 .get_setting("cleanup_days")
                 .and_then(|v| v.parse::<i64>().ok())
-            {
-                if days > 0 {
-                    let cutoff =
-                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as i64 - days * 86_400_000)
-                            .unwrap_or(0);
-                    store.cleanup_older_than(cutoff);
+                .unwrap_or(365);
+            if cleanup_days > 0 {
+                let cutoff = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64 - cleanup_days * 86_400_000)
+                    .unwrap_or(0);
+                let removed = store.cleanup_older_than(cutoff);
+                if removed > 0 {
+                    log::info!("启动清理:按保留 {cleanup_days} 天删除 {removed} 条过期数据");
                 }
             }
 
@@ -709,14 +773,27 @@ fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 后台聚合线程:10s tick → 快照广播给前端(02-DESIGN §2.3 调度)
+/// 后台聚合线程:10s tick → 快照广播给前端(02-DESIGN §2.3 调度)。
+/// tick 全程 catch_unwind(审查 1.1):单轮 panic 不允许杀死线程造成岛永久
+/// 静默冻结——panic 已由全局钩子落盘,线程降级续跑,快照带 degraded 标志
 fn spawn_aggregator(app: tauri::AppHandle, store: Arc<Store>) {
     std::thread::spawn(move || {
         let mut agg = Aggregator::new(store);
         loop {
-            let snap = agg.tick();
-            // 前端未监听时 emit 也只是无接收者,不报错
-            let _ = app.emit("island-snapshot", &snap);
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| agg.tick()));
+            match result {
+                Ok(snap) => {
+                    // 前端未监听时 emit 也只是无接收者,不报错
+                    let _ = app.emit("island-snapshot", &snap);
+                }
+                Err(payload) => {
+                    log::error!(
+                        "聚合 tick panic(本轮无快照,线程续跑): {}",
+                        logging::panic_payload_str(payload)
+                    );
+                }
+            }
             std::thread::sleep(Duration::from_secs(10));
         }
     });

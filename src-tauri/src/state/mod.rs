@@ -38,18 +38,28 @@ pub enum IslandState {
     AnyError,
 }
 
-/// 限流/额度类错误关键词(来源:glm-quota-line 同款正则 + 常见补充,01-RESEARCH §7)
+/// 限流/额度类错误关键词(来源:glm-quota-line 同款正则 + 常见补充,01-RESEARCH §7)。
+/// 审查 3.2 收紧:"额度/频率"这类宽词必须与状态词组合命中,避免普通通知
+/// (如"额度明细已生成")被误判为 error
 fn is_rate_limit_message(msg: &str) -> bool {
     let m = msg.to_ascii_lowercase();
-    m.contains("rate limit")
+    if m.contains("rate limit")
         || m.contains("too many requests")
         || m.contains("too frequent")
-        || m.contains("frequency")
-        || m.contains("限流")
-        || m.contains("频率")
         || m.contains("过于频繁")
+        || m.contains("限流")
         || m.contains("稍后再试")
-        || m.contains("额度")
+    {
+        return true;
+    }
+    let quota_status = m.contains("耗尽")
+        || m.contains("不足")
+        || m.contains("超限")
+        || m.contains("上限")
+        || m.contains("用完")
+        || m.contains("重试");
+    let freq_status = m.contains("限制") || m.contains("过快");
+    (m.contains("额度") && quota_status) || (m.contains("频率") && freq_status)
 }
 
 /// 看门狗:working 状态无活动的最长容忍(毫秒),超时回落 idle
@@ -179,6 +189,17 @@ mod tests {
         // 普通通知(非限流)→ waiting
         s.notification_message = Some("Claude needs your permission".into());
         assert_eq!(compute_state(&s, NOW), SessionState::Waiting);
+        // 审查 3.2:宽词必须与状态词组合——"额度已耗尽"算错误
+        s.notification_message = Some("5 小时额度已耗尽,请等待重置".into());
+        assert_eq!(compute_state(&s, NOW), SessionState::Error);
+        // "额度"单独出现(如明细提示)不再误判 error → waiting
+        s.notification_message = Some("本月额度明细已生成".into());
+        assert_eq!(compute_state(&s, NOW), SessionState::Waiting);
+        // "频率"单独出现不再误判;"频率过快"仍算错误
+        s.notification_message = Some("采样频率说明".into());
+        assert_eq!(compute_state(&s, NOW), SessionState::Waiting);
+        s.notification_message = Some("请求频率过快".into());
+        assert_eq!(compute_state(&s, NOW), SessionState::Error);
         // 最近错误(ZCode error_type)→ error;窗口外不标红
         let mut s2 = sig();
         s2.recent_error = Some((NOW - 60_000, "api_error".into()));

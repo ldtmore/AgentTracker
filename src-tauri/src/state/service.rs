@@ -1,6 +1,14 @@
 //! 聚合服务:定时 tick,把采集器/事件/额度融合为岛快照(IslandSnapshot)。
 //! 调度策略:每 tick(建议 10s)做采集+状态计算;GLM 额度每 5 分钟刷新一次,
 //! 刷新失败降级显示最近快照(红线④)。T8/T9 由 Tauri 后台线程驱动并向前端广播。
+//!
+//! 2026-09-17 审查优化:
+//!   ① 适配器注册表(审查 3.6):Vec<Box<dyn AgentAdapter>>,新 Agent 即插即用;
+//!   ② degraded 标志(审查 1.1):连续多轮采集源失败 → 快照带降级位,前端可见,
+//!      配合文件日志终结"静默失明";
+//!   ③ 进程枚举复用 System 实例且降频到 30s(审查 2.2.4);
+//!   ④ 会话 token/模型改批量查询(审查 2.2.2,消除逐会话 N+1);
+//!   ⑤ hook 事件文件消费失败留痕 + 已消费完超限自动轮转(审查 1.2)。
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,6 +29,11 @@ const QUOTA_REFRESH_MS: i64 = 5 * 60 * 1000;
 /// 水位安全余量(毫秒,R4):并发会话慢刷盘的行 ts 可能略小于其他会话推进的
 /// 全局水位,按原始水位过滤会永久丢行;回退 60s 重采,幂等键保证不重复入库
 const WATERMARK_MARGIN_MS: i64 = 60 * 1000;
+/// 进程枚举间隔(毫秒,审查 2.2.4):全量刷新开销可观,且进程存亡只影响
+/// idle/offline 粒度,30s 精度足够
+const PROBE_INTERVAL_MS: i64 = 30 * 1000;
+/// 连续失败多少轮判定 degraded(10s/轮,3 轮 ≈ 30s:瞬时抖动不闪红)
+const DEGRADE_AFTER_TICKS: u32 = 3;
 
 /// 展示用会话视图(serde 给前端)
 #[derive(Debug, Clone, serde::Serialize)]
@@ -52,19 +65,30 @@ pub struct IslandSnapshot {
     pub quotas: Vec<QuotaView>,
     /// GLM 5h 额度已耗尽(100%):不改写会话状态,由前端驱动胶囊变红/标签红光
     pub quota_exhausted: bool,
+    /// 采集源连续失败(审查 1.1):前端在收缩态提示"采集异常",
+    /// 与"没有会话"区分开——降级必须可见,不允许静默失明
+    pub degraded: bool,
     pub generated_at: i64,
 }
 
-/// 聚合器(有状态:水位/事件偏移/额度刷新计时)
+/// 聚合器(有状态:水位/事件偏移/额度刷新计时/进程探测缓存)
 pub struct Aggregator {
     store: Arc<Store>,
-    zcode: ZcodeAdapter,
-    cc: ClaudeCodeAdapter,
+    /// Agent 适配器注册表(审查 3.6):新增 Agent = 实现 trait 后在此登记,
+    /// 采集主循环不出现 per-agent if-else
+    adapters: Vec<Box<dyn AgentAdapter>>,
     /// hook 事件文件的消费偏移(持久化于 app_settings)
     hook_offset: u64,
     /// 上次额度刷新成功时间
     last_quota_fetch: i64,
     glm: Option<GlmProvider>,
+    /// 进程枚举复用实例(审查 2.2.4):避免每 tick 重建 sysinfo 全量快照
+    sys: sysinfo::System,
+    /// (zcode 活着, claude 活着)探测缓存
+    probe_cache: (bool, bool),
+    last_probe_ms: i64,
+    /// 连续采集失败轮数(degraded 判定输入)
+    fail_streak: u32,
 }
 
 impl Aggregator {
@@ -89,52 +113,80 @@ impl Aggregator {
         };
         // 记录凭据来源供设置页展示"(当前:xxx)";无凭据时清除旧记录
         store.set_setting("glm_token_source", &source);
+        if glm.is_none() {
+            log::info!("GLM 凭据未配置:额度功能区停用(设置页可配置,或走自动发现链)");
+        }
         Self {
             store,
-            zcode: ZcodeAdapter::new(),
-            cc: ClaudeCodeAdapter::new(),
+            adapters: vec![Box::new(ZcodeAdapter::new()), Box::new(ClaudeCodeAdapter::new())],
             hook_offset,
             last_quota_fetch: 0,
             glm,
+            sys: sysinfo::System::new(),
+            probe_cache: (false, false),
+            last_probe_ms: 0,
+            fail_streak: 0,
         }
     }
 
     /// 执行一轮采集+融合,返回岛快照
     pub fn tick(&mut self) -> IslandSnapshot {
         let now = now_ms();
+        let mut had_error = false;
 
         // ① hooks 事件增量(claude-code;文件不存在=未安装增强档,静默降级)
         let mut last_hooks: HashMap<String, (String, i64, Option<String>)> = HashMap::new();
         if let Some(path) = hook_events::events_file_path() {
-            let (events, new_off) = hook_events::read_events(&path, self.hook_offset);
-            // 偏移无推进时免写库(R9,每 10s 一次的空写没必要)
-            if new_off != self.hook_offset {
-                self.store.set_setting("hook_events_offset", &new_off.to_string());
-            }
-            self.hook_offset = new_off;
-            for ev in events {
-                // 原始事件审计落库 status_events(02-DESIGN §3,R7)
-                self.store.insert_status_event(
-                    "claude-code",
-                    Some(ev.session_id.as_str()),
-                    &ev.hook,
-                    &serde_json::to_string(&ev).unwrap_or_default(),
-                    ev.ts,
-                );
-                // 每会话保留最新事件
-                last_hooks
-                    .entry(ev.session_id.clone())
-                    .and_modify(|e| {
-                        if ev.ts >= e.1 {
-                            *e = (ev.hook.clone(), ev.ts, ev.message.clone());
-                        }
-                    })
-                    .or_insert((ev.hook.clone(), ev.ts, ev.message.clone()));
+            match hook_events::read_events(&path, self.hook_offset) {
+                Ok((events, new_off)) => {
+                    // 偏移无推进时免写库(R9,每 10s 一次的空写没必要)
+                    if new_off != self.hook_offset {
+                        self.store.set_setting("hook_events_offset", &new_off.to_string());
+                    }
+                    self.hook_offset = new_off;
+                    for ev in events {
+                        // 原始事件审计落库 status_events(02-DESIGN §3,R7)
+                        self.store.insert_status_event(
+                            "claude-code",
+                            Some(ev.session_id.as_str()),
+                            &ev.hook,
+                            &serde_json::to_string(&ev).unwrap_or_default(),
+                            ev.ts,
+                        );
+                        // 每会话保留最新事件
+                        last_hooks
+                            .entry(ev.session_id.clone())
+                            .and_modify(|e| {
+                                if ev.ts >= e.1 {
+                                    *e = (ev.hook.clone(), ev.ts, ev.message.clone());
+                                }
+                            })
+                            .or_insert((ev.hook.clone(), ev.ts, ev.message.clone()));
+                    }
+                    // 轮转:仅当本轮已全部消费且超限;归零后回写偏移(审查 1.2)
+                    let rotated = hook_events::rotate_if_large(
+                        &path,
+                        self.hook_offset,
+                        hook_events::MAX_EVENT_FILE_BYTES,
+                    );
+                    if rotated != self.hook_offset {
+                        self.hook_offset = rotated;
+                        self.store.set_setting("hook_events_offset", "0");
+                    }
+                }
+                Err(e) => {
+                    log::warn!("hook 事件文件读取失败(本轮按无事件处理): {e:#}");
+                    had_error = true;
+                }
             }
         }
 
-        // ② 进程枚举兜底(L0:区分 idle 与 offline)
-        let (zcode_alive, claude_alive) = probe_processes();
+        // ② 进程枚举兜底(L0:区分 idle 与 offline;30s 一探,结果缓存复用)
+        if now - self.last_probe_ms >= PROBE_INTERVAL_MS {
+            self.probe_cache = probe_processes(&mut self.sys);
+            self.last_probe_ms = now;
+        }
+        let (zcode_alive, claude_alive) = self.probe_cache;
 
         // ③ 采集已勾选 Agent 的会话与用量(设置页 agents_enabled:勾选才采集/监控/展示,
         //    不勾选则完全不处理;设置键不存在时默认全部启用——兼容升级与首次运行)
@@ -149,26 +201,32 @@ impl Aggregator {
             };
 
         let mut views: Vec<SessionView> = vec![];
-        for agent_id in ["zcode", "claude-code"] {
+        for ad in &self.adapters {
+            let agent_id = ad.id();
             if !is_enabled(agent_id) {
                 continue;
             }
-            let info_list = if agent_id == "zcode" {
-                self.zcode.scan_sessions().unwrap_or_default()
-            } else {
-                self.cc.scan_sessions().unwrap_or_default()
-            };
-            let adapter: &dyn AgentAdapter = if agent_id == "zcode" {
-                &self.zcode
-            } else {
-                &self.cc
+            let info_list = match ad.scan_sessions() {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("[{agent_id}] 会话扫描失败(本轮按空处理): {e:#}");
+                    had_error = true;
+                    vec![]
+                }
             };
             // 增量用量入库 + 水位推进(水位带 60s 安全余量,R4)
             let watermark = self
                 .store
                 .get_watermark(agent_id)
                 .saturating_sub(WATERMARK_MARGIN_MS);
-            let usage = adapter.collect_usage(watermark).unwrap_or_default();
+            let usage = match ad.collect_usage(watermark) {
+                Ok(u) => u,
+                Err(e) => {
+                    log::warn!("[{agent_id}] 用量采集失败(本轮按空处理): {e:#}");
+                    had_error = true;
+                    vec![]
+                }
+            };
             self.store.insert_usage(&usage);
             if let Some(max_ts) = usage.iter().map(|u| u.ts).max() {
                 self.store.set_watermark(agent_id, max_ts);
@@ -181,11 +239,22 @@ impl Aggregator {
                 }
             }
 
+            // 批量取本批会话的累计 token 与最近模型(审查 2.2.2:
+            // 替代旧的每会话 2 次点查——100 会话即每 10s 200 次无索引扫描)
+            let ids: Vec<String> = info_list.iter().map(|i| i.id.clone()).collect();
+            let totals = self.store.session_usage_totals(&ids);
+            let latest_models = self.store.latest_session_models(&ids);
+
             for info in &info_list {
                 let raw_sid = info.id.split_once(':').map(|(_, s)| s).unwrap_or("");
                 let mut sig = SessionSignals {
                     last_activity_at: info.last_usage_at,
-                    process_alive: if agent_id == "zcode" { zcode_alive } else { claude_alive },
+                    // 进程名匹配是各 Agent 的私有知识:新适配器接入时在此补充映射
+                    process_alive: match agent_id {
+                        "zcode" => zcode_alive,
+                        "claude-code" => claude_alive,
+                        _ => false,
+                    },
                     ..Default::default()
                 };
                 // hooks 信号仅 claude-code 有(事件里 session_id 为原始 id)
@@ -214,20 +283,19 @@ impl Aggregator {
                     id: info.id.clone(),
                     agent: agent_id.to_string(),
                     // Claude Code scan 阶段拿不到 model,从自库最近一次调用兜底回填(R1)
-                    model: info
-                        .model
-                        .clone()
-                        .or_else(|| self.store.latest_session_model(&info.id)),
+                    model: info.model.clone().or_else(|| latest_models.get(&info.id).cloned()),
                     project_dir: info.project_dir.clone(),
                     title: info.title.clone(),
                     state,
-                    session_tokens: self.store.session_usage_total(&info.id),
+                    session_tokens: totals.get(&info.id).copied().unwrap_or(0),
                     last_activity_at: info.last_usage_at,
                 });
             }
         }
 
-        // ④ GLM 额度:按间隔刷新,失败降级(最近快照仍可用)
+        // ④ GLM 额度:按间隔刷新,失败降级(最近快照仍可用)。
+        //    额度失败有独立降级语义(glm.rs 已留痕),不计入 degraded——
+        //    degraded 表达"观测能力受损",而非"外部接口抖动"
         if now - self.last_quota_fetch >= QUOTA_REFRESH_MS {
             if let Some(glm) = &self.glm {
                 if let Ok(rows) = glm.fetch_quota() {
@@ -252,20 +320,30 @@ impl Aggregator {
             .into_iter()
             .map(|q| QuotaView { provider: q.provider, window_kind: q.window_kind, used_percent: q.used_percent, reset_at: q.reset_at })
             .collect();
+        // degraded:连续多轮有采集源失败才置位;恢复即清零
+        if had_error {
+            self.fail_streak += 1;
+        } else {
+            self.fail_streak = 0;
+        }
+        let degraded = self.fail_streak >= DEGRADE_AFTER_TICKS;
+        if degraded {
+            log::warn!("采集源连续 {} 轮失败,快照标记 degraded", self.fail_streak);
+        }
         IslandSnapshot {
             sessions: views,
             island,
             quotas: quota_views,
             quota_exhausted,
+            degraded,
             generated_at: now,
         }
     }
 }
 
-/// 进程枚举:返回 (zcode 活着, claude 活着)
-fn probe_processes() -> (bool, bool) {
-    use sysinfo::System;
-    let mut sys = System::new();
+/// 进程枚举:返回 (zcode 活着, claude 活着)。
+/// sys 由调用方持有复用(审查 2.2.4:Windows 上全量刷新进程含命令行读取,开销可观)
+fn probe_processes(sys: &mut sysinfo::System) -> (bool, bool) {
     sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
     let mut z = false;
     let mut c = false;

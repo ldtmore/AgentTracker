@@ -57,7 +57,10 @@ export default function IslandBar({
       <span className={`dot ${meta.dot}`} data-tauri-drag-region />
       <span className="island-text" data-tauri-drag-region>
         {snap
-          ? `${total} 会话${working > 0 ? ` · ${working} 工作中` : ""} · ${meta.label}`
+          ? `${total} 会话${working > 0 ? ` · ${working} 工作中` : ""} · ${meta.label}${
+              // 降级可见(审查 1.1):采集源连续失败时明确提示,与"没有会话"区分
+              snap.degraded ? " · 采集异常" : ""
+            }`
           : "AgentTrackerIsland 启动中…"}
       </span>
       {q5hPct != null && (

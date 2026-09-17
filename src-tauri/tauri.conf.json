@@ -27,10 +27,12 @@
         "label": "settings",
         "title": "AgentTrackerIsland 设置",
         "url": "index.html#settings",
-        "width": 460,
+        "width": 800,
         "height": 600,
+        "minWidth": 520,
+        "minHeight": 480,
         "visible": false,
-        "resizable": false,
+        "resizable": true,
         "center": true
       },
       {
@@ -47,7 +49,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420 ws://localhost:1421"
     }
   },
   "bundle": {

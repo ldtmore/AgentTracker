@@ -1,12 +1,20 @@
 //! Claude Code 适配器:解析 `~\.claude\projects\**\*.jsonl` 转录文件。
 //! 数据源勘察见 docs/01-RESEARCH.md §2;采集策略:
-//!   文件级 mtime 过滤(旧文件必无新行)→ 行级时间过滤 → 幂等键去重入库。
+//!   文件级 mtime 过滤(旧文件必无新行)→ **per-file 字节偏移增量读**(2026-09-17
+//!   审查 1.3,替代旧的"有变动即整文件重读")→ 行级时间过滤 → 幂等键去重入库。
 //! Claude Code JSONL 的时间戳是 ISO 8601,需转 Unix 毫秒;usage 字段为 snake_case。
 
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use super::{AgentAdapter, SessionInfo, provider_from_model};
 use crate::store::UsageRow;
+
+/// 单文件增量回退字节量:与 service 层 60s 水位余量配对,覆盖"行写入顺序
+/// 与时间戳乱序"的边缘;回读的旧行靠调用内去重 + 自库幂等键兜底,不会重复
+const BACKTRACK_BYTES: u64 = 64 * 1024;
 
 /// 转录根目录(%USERPROFILE%\.claude\projects)
 fn projects_root() -> Option<PathBuf> {
@@ -57,13 +65,35 @@ struct TranscriptLine {
 
 pub struct ClaudeCodeAdapter {
     root: PathBuf,
+    /// per-file 增量游标(审查 1.3):路径 → (上次采集时的 mtime_ms, 已消费字节偏移)。
+    /// 仅内存态,重启后首轮回读全量、由行级水位过滤裁剪——与旧实现一致
+    offsets: Mutex<HashMap<PathBuf, (i64, u64)>>,
+    /// cwd 提取缓存(审查 2.2.3):路径 → (mtime_ms, 项目目录)。转录头部 cwd
+    /// 恒定,旧实现每 tick 对每文件重读 8KB;缓存后仅 mtime 变化时重读
+    cwd_cache: Mutex<HashMap<PathBuf, (i64, Option<String>)>>,
 }
 
 impl ClaudeCodeAdapter {
     pub fn new() -> Self {
+        Self::with_root(projects_root().unwrap_or_else(|| PathBuf::from("")))
+    }
+
+    /// 指定根目录构造(单测注入临时目录用)
+    pub fn with_root(root: PathBuf) -> Self {
         Self {
-            root: projects_root().unwrap_or_else(|| PathBuf::from("")),
+            root,
+            offsets: Mutex::new(HashMap::new()),
+            cwd_cache: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 锁中毒自恢复(与 store 同策略,审查 1.1:单次 panic 不放大为连锁失败)
+    fn lock_offsets(&self) -> MutexGuard<'_, HashMap<PathBuf, (i64, u64)>> {
+        self.offsets.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn lock_cwd(&self) -> MutexGuard<'_, HashMap<PathBuf, (i64, Option<String>)>> {
+        self.cwd_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// 遍历所有转录文件(projects/{项目编码目录}/{sessionId}.jsonl)
@@ -141,14 +171,24 @@ impl AgentAdapter for ClaudeCodeAdapter {
             if session_id.is_empty() {
                 continue;
             }
-            // 项目目录:优先转录行内真实 cwd(R2);取不到退回编码目录名(仅展示兜底)
-            let project =
-                Self::first_cwd(&f).or_else(|| {
-                    f.parent()
-                        .and_then(|p| p.file_name())
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
-                });
+            // 项目目录:优先转录行内真实 cwd(R2);取不到退回编码目录名(仅展示兜底)。
+            // cwd 恒定,按 mtime 缓存避免每 tick 对每文件重读 8KB 头部(审查 2.2.3)
+            let project = {
+                let mut map = self.lock_cwd();
+                match map.get(&f).cloned() {
+                    Some((m0, cached)) if m0 == mtime => cached,
+                    _ => {
+                        let fresh = Self::first_cwd(&f).or_else(|| {
+                            f.parent()
+                                .and_then(|p| p.file_name())
+                                .and_then(|n| n.to_str())
+                                .map(|s| s.to_string())
+                        });
+                        map.insert(f.clone(), (mtime, fresh.clone()));
+                        fresh
+                    }
+                }
+            };
             out.push(SessionInfo {
                 id: format!("claude-code:{session_id}"),
                 agent: "claude-code".into(),
@@ -167,24 +207,59 @@ impl AgentAdapter for ClaudeCodeAdapter {
         Ok(out)
     }
 
-    /// 水位增量:跳过 mtime 早于水位的文件,再逐行解析 assistant 消息按时间过滤;
-    /// 按 message.id 全局去重(同 id 保留用量快照最大的一行)
+    /// 水位增量:跳过 mtime 早于水位的文件;**per-file 字节偏移增量读**(审查 1.3):
+    /// mtime 未变 → 无新字节直接跳过;有变化 → 从(上次偏移 - 64KB 回退量)读到尾,
+    /// 只解析新增部分——替代旧"有变动即整文件重读+逐行解析",长会话文件数十 MB 时
+    /// 每 tick 的开销从 O(全文件) 降为 O(新增)。回读与乱序兜底靠调用内去重 +
+    /// 自库幂等键,不会重复入库;按 message.id 去重(同 id 保留用量最大行)
     fn collect_usage(&self, watermark_ts: i64) -> anyhow::Result<Vec<UsageRow>> {
         let mut dedup: std::collections::HashMap<String, UsageRow> = std::collections::HashMap::new();
         for f in self.transcript_files() {
-            if Self::mtime_ms(&f) <= watermark_ts {
+            let mtime = Self::mtime_ms(&f);
+            if mtime <= watermark_ts {
                 continue; // 文件未变,必无新行
             }
+            // 打开文件拿当前长度:用于识别"重建后比旧偏移小"的场景(归零重读)
+            let Ok(mut file) = std::fs::File::open(&f) else { continue };
+            let total = match file.metadata() {
+                Ok(m) => m.len(),
+                Err(_) => continue,
+            };
+            let start = {
+                let map = self.lock_offsets();
+                match map.get(&f).copied() {
+                    Some((m0, _)) if m0 == mtime => continue, // mtime 未变:无新字节(游标保留)
+                    Some((_, off)) if off <= total => off.saturating_sub(BACKTRACK_BYTES),
+                    _ => 0, // 首见,或文件被重建/轮转(比旧偏移小):全量重读
+                }
+            };
+            let text = {
+                let mut buf = Vec::new();
+                if start > 0 && file.seek(SeekFrom::Start(start)).is_err() {
+                    continue;
+                }
+                if file.read_to_end(&mut buf).is_err() {
+                    continue; // 文件被占用:跳过本轮,下次再试
+                }
+                String::from_utf8_lossy(&buf).into_owned()
+            };
+            // 记录新游标 = 文件当前全长度(每轮都读到尾)
+            self.lock_offsets().insert(f.clone(), (mtime, total));
             let file_session = f
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            let content = match std::fs::read_to_string(&f) {
-                Ok(c) => c,
-                Err(_) => continue, // 文件被轮转/占用:跳过本轮,下次再试
+            // 起点落在半行中间(回退导致):跳过该残行,从下一个换行起解析
+            let body = if start == 0 {
+                text.as_str()
+            } else {
+                match text.find('\n') {
+                    Some(i) => &text[i + 1..],
+                    None => continue, // 无完整新行
+                }
             };
-            for line in content.lines() {
+            for line in body.lines() {
                 let Ok(j) = serde_json::from_str::<TranscriptLine>(line) else {
                     continue; // 容忍坏行(红线:解析失败不阻塞)
                 };
@@ -311,14 +386,66 @@ pub fn install_hooks() -> anyhow::Result<usize> {
     std::fs::write(&bridge, BRIDGE_SOURCE)?;
     let settings = claude_settings_path().ok_or_else(|| anyhow::anyhow!("无法定位 settings.json"))?;
     let cmd = format!("node \"{}\"", bridge.to_string_lossy().replace('\\', "/"));
-    inject_into_settings(&settings, &cmd)
+    let injected = inject_into_settings(&settings, &cmd)?;
+    log::info!("hooks 安装完成:注入 {injected} 个事件,桥脚本 {}", bridge.display());
+    Ok(injected)
 }
 
 /// 卸载:移除全部自家注入条目(含空事件键清理);返回移除条数。
 /// 桥脚本文件保留(重装免复制,且无副作用)
 pub fn uninstall_hooks() -> anyhow::Result<usize> {
     let settings = claude_settings_path().ok_or_else(|| anyhow::anyhow!("无法定位 settings.json"))?;
-    uninstall_from_settings(&settings)
+    let removed = uninstall_from_settings(&settings)?;
+    log::info!("hooks 卸载完成:移除 {removed} 个注入条目");
+    Ok(removed)
+}
+
+/// 原子写(临时文件 + rename)。目标被占用时(典型:编辑器常驻打开 settings.json)
+/// Windows 的 rename 会失败——退避重试三次后放弃并给出可操作的指引(审查 2.1.4)
+fn atomic_write_retry(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+    let tmp = path.with_extension("json.at-tmp");
+    std::fs::write(&tmp, data)?;
+    let mut last_err = None;
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(anyhow::anyhow!(
+        "写入 {} 失败(目标可能被编辑器占用,请关闭正在编辑该文件的程序后重试): {}",
+        path.display(),
+        last_err.unwrap()
+    ))
+}
+
+/// 清理历史备份,只保留最近 keep 份(审查 2.1.4:备份文件名带毫秒时间戳,
+/// 字典序即时间序;此前无限累积)
+fn prune_backups(path: &Path, keep: usize) {
+    let Some(dir) = path.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut baks: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("settings.json.bak-at-"))
+                .unwrap_or(false)
+        })
+        .collect();
+    baks.sort();
+    if baks.len() <= keep {
+        return;
+    }
+    let removed = baks.len() - keep;
+    for stale in baks.iter().take(removed) {
+        let _ = std::fs::remove_file(stale);
+    }
+    log::info!("hooks 备份清理:移除 {removed} 份历史备份,保留最近 {keep} 份");
 }
 
 /// settings.json 注入核心(独立函数便于用临时文件做单测)
@@ -352,10 +479,10 @@ fn inject_into_settings(path: &std::path::Path, command: &str) -> anyhow::Result
         }));
         injected += 1;
     }
-    // 原子写:临时文件+rename,避免写一半损坏(红线:绝不弄坏用户配置)
-    let tmp = path.with_extension("json.at-tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(&s)?)?;
-    std::fs::rename(&tmp, path)?;
+    // 原子写:临时文件+rename,避免写一半损坏(红线:绝不弄坏用户配置);
+    // rename 失败重试(审查 2.1.4)
+    atomic_write_retry(path, serde_json::to_string_pretty(&s)?.as_bytes())?;
+    prune_backups(path, 5);
     Ok(injected)
 }
 
@@ -384,9 +511,7 @@ fn uninstall_from_settings(path: &std::path::Path) -> anyhow::Result<usize> {
     if s["hooks"].as_object().map(|o| o.is_empty()).unwrap_or(true) {
         s.as_object_mut().unwrap().remove("hooks");
     }
-    let tmp = path.with_extension("json.at-tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(&s)?)?;
-    std::fs::rename(&tmp, path)?;
+    atomic_write_retry(path, serde_json::to_string_pretty(&s)?.as_bytes())?;
     Ok(removed)
 }
 
@@ -497,7 +622,7 @@ mod tests {
 
         // 3) 事件文件落盘且可消费
         let evfile = crate::collector::hook_events::events_file_path().unwrap();
-        let (events, offset) = crate::collector::hook_events::read_events(&evfile, 0);
+        let (events, offset) = crate::collector::hook_events::read_events(&evfile, 0).unwrap();
         let fresh: Vec<_> = events.iter().filter(|e| e.session_id != "manual-test").collect();
         println!("捕获事件({} 条,偏移 {}): {:?}", fresh.len(), offset,
             fresh.iter().map(|e| e.hook.as_str()).collect::<Vec<_>>());
@@ -539,7 +664,7 @@ mod tests {
         ];
         std::fs::write(&file, lines.join("\n")).unwrap();
 
-        let ad = ClaudeCodeAdapter { root: dir.clone() };
+        let ad = ClaudeCodeAdapter::with_root(dir.clone());
         let rows = ad.collect_usage(0).unwrap();
         // msg_a 去重后保留大快照 + msg_b:共 2 行
         assert_eq!(rows.len(), 2, "同 message.id 必须去重");
@@ -555,6 +680,38 @@ mod tests {
         assert!(rows2.is_empty());
         // 但注意:该临时文件 mtime 是"现在",> 大水位?不——水位比较用文件 mtime <= watermark 跳过,
         // 1.8e15 是远未来,mtime(现在)< 水位 → 文件被跳过,结果一致为空,验证文件级过滤也生效
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 增量读回归(审查 1.3):同实例重复采集,第二次只产出新追加的行;
+    /// 未变化时产 0 行。旧实现整文件重读也能得到相同"结果"(靠水位过滤),
+    /// 此测试锁定增量路径行为不回退
+    #[test]
+    fn test_collect_incremental_offset() {
+        let dir = std::env::temp_dir().join(format!("at-t4-incr-{}", std::process::id()));
+        let proj = dir.join("F--incr-test");
+        std::fs::create_dir_all(&proj).unwrap();
+        let file = proj.join("sess-incr.jsonl");
+        let line1 = r#"{"type":"assistant","timestamp":"2026-09-15T10:00:01.000Z","sessionId":"sess-incr","message":{"id":"msg_1","model":"glm-5.3","usage":{"input_tokens":10,"output_tokens":5}}}"#;
+        std::fs::write(&file, format!("{line1}\n")).unwrap();
+
+        let ad = ClaudeCodeAdapter::with_root(dir.clone());
+        let r1 = ad.collect_usage(0).unwrap();
+        assert_eq!(r1.len(), 1);
+        let ts1 = chrono::DateTime::parse_from_rfc3339("2026-09-15T10:00:01.000Z")
+            .unwrap()
+            .timestamp_millis();
+
+        // 追加第二条消息 → 旧行被水位过滤,只产出新增 1 行(与 service 层调用一致)
+        let line2 = r#"{"type":"assistant","timestamp":"2026-09-15T10:00:02.000Z","sessionId":"sess-incr","message":{"id":"msg_2","model":"glm-5.3","usage":{"input_tokens":20,"output_tokens":8}}}"#;
+        std::fs::write(&file, format!("{line1}\n{line2}\n")).unwrap();
+        let r2 = ad.collect_usage(ts1).unwrap();
+        assert_eq!(r2.len(), 1, "第二次采集应只含新增行");
+        assert_eq!(r2[0].input_tokens, Some(20));
+
+        // 文件未变化 → 0 行
+        let r3 = ad.collect_usage(0).unwrap();
+        assert!(r3.is_empty(), "mtime 未变时应跳过文件");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

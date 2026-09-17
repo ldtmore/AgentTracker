@@ -40,6 +40,8 @@ export interface IslandSnapshot {
   quotas: QuotaView[];
   /** GLM 5h 额度已耗尽(100%):胶囊/标签据此变红,但会话状态保持真实值 */
   quota_exhausted: boolean;
+  /** 采集源连续失败(2026-09-17 审查新增):岛收缩态据此提示"采集异常" */
+  degraded?: boolean;
   generated_at: number;
 }
 

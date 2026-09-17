@@ -1,58 +1,201 @@
 /**
- * 设置页(T11):GLM 凭据 / 提醒阈值 / 数据清理周期 / hooks 开关 / 开机自启
- * 保存写入 app_settings;GLM 凭据与阈值在应用重启后生效(聚合器启动时读取)。
- * Key 不回显;留空保存 = 沿用已存 Key 或自动发现链(env/claude-menu),不覆盖
+ * 设置页(T11 / 2026-09-17 重构):分区卡片 + 设置项即时生效
+ * - 布局:统一"设置行"(固定标题 + 固定描述 + 右侧控件),按使用频率分五节;
+ *   分区头为主标题 + 副标题同行(副标题不换行,窗口最小宽度据此设下限)
+ * - 交互:改动即存即生效(无保存按钮、不再保存后自动关窗);开关行标题/描述固定,
+ *   状态由 Switch 与徽标表达,文案不随选中态变化(遵循 Fluent 开关文案规范)
+ * - 反馈:校验错误内联显示在出错行正下方;操作结果用顶部 toast(成功 2.5s 自动消失,
+ *   失败常驻直到下一次提示);凭据/阈值"重启生效"的事实写入行描述,不做打扰式弹提示
+ * - Key 不回显;留空失焦 = 沿用已存 Key 或自动发现链(env/claude-menu),不覆盖
+ * - 界面文案一律简体中文标点(2026-09-17 验收建议 3)
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { AGENT_COLORS, AGENT_DEFS } from "./shared/types";
 import { asThemeMode, useTheme, type ThemeMode } from "./shared/theme";
 import "./settings.css";
 
-/** 数据清理周期选项(天;0=永不清理) */
+/** 数据保留时长选项(天),按时长降序;12 个月 = 365 天,与后端"未设置默认保留 1 年"一致 */
 const CLEANUP_OPTIONS: { label: string; days: number }[] = [
-  { label: "永不清理(默认)", days: 0 },
-  { label: "保留 3 年", days: 1095 },
-  { label: "保留 2 年", days: 730 },
-  { label: "保留 1 年", days: 365 },
-  { label: "保留 6 个月", days: 180 },
-  { label: "保留 3 个月", days: 90 },
-  { label: "保留 1 个月", days: 30 },
-  { label: "保留 1 周", days: 7 },
+  { label: "12 个月", days: 365 },
+  { label: "6 个月", days: 180 },
+  { label: "3 个月", days: 90 },
+  { label: "1 个月", days: 30 },
+  { label: "15 天", days: 15 },
+  { label: "7 天", days: 7 },
+  { label: "1 天", days: 1 },
 ];
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** 默认保留时长(12 个月;与后端清理默认值 365 天一致) */
+const CLEANUP_DEFAULT_DAYS = 365;
+
+/** 分区卡片:主标题 + 副标题同行(主/副标题关系),下方为设置行列表 */
+function Section({
+  title,
+  desc,
+  children,
+}: {
+  title: string;
+  desc?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="st-section">
-      <div className="st-title">{title}</div>
-      {children}
+    <section className="st-section">
+      <div className="st-sec-head">
+        <div className="st-sec-title">{title}</div>
+        {desc && <div className="st-sec-desc">{desc}</div>}
+      </div>
+      <div className="st-sec-body">{children}</div>
+    </section>
+  );
+}
+
+/** 设置行:左 = 固定标题(+可选徽标)+ 固定描述,右 = 控件;error 就近显示在本行下方 */
+function Row({
+  title,
+  badge,
+  desc,
+  error,
+  tall,
+  children,
+}: {
+  title: string;
+  badge?: React.ReactNode;
+  desc?: string;
+  error?: string;
+  /** tall:宽控件(输入框)放到文字下方独占一行 */
+  tall?: boolean;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="st-row-item">
+      <div className="st-row-main">
+        <div className="st-row-text">
+          <div className="st-row-title">
+            {title}
+            {badge}
+          </div>
+          {desc && <div className="st-row-desc">{desc}</div>}
+        </div>
+        {!tall && children != null && <div className="st-row-control">{children}</div>}
+      </div>
+      {tall && children != null && (
+        <div className="st-row-control st-row-control-tall">{children}</div>
+      )}
+      {error && <div className="st-row-error">{error}</div>}
     </div>
   );
 }
 
+/** 滑动开关:状态由开/关位置表达,标题文案保持固定 */
+function Switch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      className={`st-switch${checked ? " st-switch-on" : ""}`}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="st-switch-thumb" />
+    </button>
+  );
+}
+
+/** 三档分段选择(主题):点击即切换并全窗口预览 */
+function Segmented({
+  value,
+  onChange,
+}: {
+  value: ThemeMode;
+  onChange: (v: ThemeMode) => void;
+}) {
+  const options: { value: ThemeMode; label: string }[] = [
+    { value: "system", label: "跟随系统" },
+    { value: "dark", label: "深色" },
+    { value: "light", label: "浅色" },
+  ];
+  return (
+    <div className="st-seg" role="radiogroup" aria-label="主题模式">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          role="radio"
+          aria-checked={value === o.value}
+          className={value === o.value ? "st-seg-item st-seg-on" : "st-seg-item"}
+          onClick={() => onChange(o.value)}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** 状态徽标:点色 + 文案(已启用=强调色,未启用=灰),随主题换色 */
+function Badge({ on, text }: { on: boolean; text: string }) {
+  return (
+    <span className={on ? "st-badge st-badge-on" : "st-badge"}>
+      <i className="st-badge-dot" />
+      {text}
+    </span>
+  );
+}
+
+/** 眼睛图标(off=true 画斜线,表示当前隐藏中) */
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg
+      width="15"
+      height="15"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+      <circle cx="12" cy="12" r="3" />
+      {off && <line x1="4" y1="4" x2="20" y2="20" />}
+    </svg>
+  );
+}
+
 export default function Settings() {
+  // —— 表单状态(每项改动即时落库,无统一保存按钮) ——
   const [glmBase, setGlmBase] = useState("https://open.bigmodel.cn");
-  const [glmToken, setGlmToken] = useState("");
-  const [tokenFrom, setTokenFrom] = useState("");
+  const [glmToken, setGlmToken] = useState(""); // 输入框内容;保存后清空(不回显已存 Key)
+  const [showToken, setShowToken] = useState(false); // 明文/密文切换
+  const [tokenFrom, setTokenFrom] = useState(""); // 已生效凭据来源(聚合器启动时写入)
   const [warn, setWarn] = useState("80");
   const [danger, setDanger] = useState("95");
-  const [cleanupDays, setCleanupDays] = useState(0);
+  const [thresholdError, setThresholdError] = useState("");
+  // 数据保留周期(未设置时后端按 1 年清理,前端默认值与之对齐)
+  const [cleanupDays, setCleanupDays] = useState(CLEANUP_DEFAULT_DAYS);
   const [hooksOn, setHooksOn] = useState(false);
+  const [hookBusy, setHookBusy] = useState(false); // 注入/卸载进行中,防连点
   const [autoStart, setAutoStart] = useState(false);
   // 灵动岛贴边自动隐藏(缺省=开,与 Rust 端 autohide_enabled 的默认一致)
   const [autoHide, setAutoHide] = useState(true);
   // 悬停自动展开信息卡片(缺省=开;关闭时点击岛展开/收回)
   const [hoverCard, setHoverCard] = useState(true);
-  // 监控的 Agent 列表(缺省全选;勾选才采集/监控/展示,不勾选则不处理)
+  // 监控的 Agent 列表(缺省全选;勾选才采集/监控/展示)
   const [agents, setAgents] = useState<string[]>(AGENT_DEFS.map((a) => a.id));
   // Agent 自定义身份色(未自定义的用系统默认色;隐藏态色块/面板徽标共用)
   const [agentColors, setAgentColors] = useState<Record<string, string>>({});
-  // 主题模式(M1-4:跟随系统/深色/浅色,保存后即时生效无需重启)
+  // 已落库的自定义色:拖拽选色过程中实时改 UI 但不落库,失焦校验撞色后按此回滚
+  const savedColorsRef = useRef<Record<string, string>>({});
+  const [colorError, setColorError] = useState("");
+  // 主题模式(跟随系统/深色/浅色,点击即切换全窗口预览)
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
-  const [msg, setMsg] = useState("");
-  // 主题应用与跟随(设置页自身也随保存广播即时切换)
+  // 顶部 toast:成功 2.5s 自动消失,失败常驻
+  const [toast, setToast] = useState<{ text: string; kind: "ok" | "error" } | null>(null);
+  const toastTimer = useRef<number | null>(null);
+  // 主题应用与跟随(设置页自身也随切换即时换色)
   useTheme();
 
   useEffect(() => {
@@ -60,10 +203,14 @@ export default function Settings() {
       try {
         const s = (await invoke("get_settings")) as Record<string, string>;
         if (s.glm_base) setGlmBase(s.glm_base);
-        // Key 不回显:字段保持空,来源经 glm_token_source 提示(聚合器启动时写入)
+        // Key 不回显:输入框保持空,来源经 glm_token_source 徽标提示
         if (s.threshold_warn) setWarn(s.threshold_warn);
         if (s.threshold_danger) setDanger(s.threshold_danger);
-        if (s.cleanup_days) setCleanupDays(Number(s.cleanup_days));
+        if (s.cleanup_days) {
+          const days = Number(s.cleanup_days);
+          // 旧档位(2 年 / 3 年 / 永不)已从选项移除,回落到默认 12 个月,避免下拉框空白
+          if (CLEANUP_OPTIONS.some((o) => o.days === days)) setCleanupDays(days);
+        }
         if (s.glm_token_source) setTokenFrom(s.glm_token_source);
         if (s.island_autohide !== undefined) setAutoHide(s.island_autohide !== "0");
         if (s.hover_expand !== undefined) setHoverCard(s.hover_expand !== "0");
@@ -79,7 +226,10 @@ export default function Settings() {
         if (s.agent_colors) {
           try {
             const colors = JSON.parse(s.agent_colors) as Record<string, string>;
-            if (colors && typeof colors === "object") setAgentColors(colors);
+            if (colors && typeof colors === "object") {
+              setAgentColors(colors);
+              savedColorsRef.current = colors;
+            }
           } catch {
             /* 解析失败用默认色 */
           }
@@ -90,231 +240,333 @@ export default function Settings() {
         /* 加载失败保持默认值 */
       }
     })();
+    // 卸载时清掉未触发的 toast 定时器
+    return () => {
+      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    };
   }, []);
 
-  const save = async () => {
-    // 阈值校验(R11):0–100 的数字,且琥珀阈值须小于红色阈值
+  /** 顶部 toast:成功短暂提示后自动消失,失败常驻直到下一次提示覆盖 */
+  const showToast = (text: string, kind: "ok" | "error") => {
+    setToast({ text, kind });
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    if (kind === "ok") {
+      toastTimer.current = window.setTimeout(() => setToast(null), 2500);
+    }
+  };
+
+  /** 单键落库;失败经 toast 提示(不阻塞界面) */
+  const saveKey = async (key: string, value: string) => {
+    try {
+      await invoke("set_setting", { key, value });
+    } catch (e) {
+      showToast(`保存失败：${e}`, "error");
+    }
+  };
+
+  /** 主题:点击即持久化并广播(广播含本窗口,useTheme 收到后即时切换 = 即时预览) */
+  const changeTheme = async (mode: ThemeMode) => {
+    setThemeMode(mode);
+    await saveKey("theme", mode);
+    await emit("theme-changed", mode).catch(() => {});
+  };
+
+  /** 贴边自动隐藏:即存即生效;关掉时若岛正处于隐藏态,Rust 会把它滑回显示 */
+  const toggleAutoHide = async (v: boolean) => {
+    setAutoHide(v);
+    await saveKey("island_autohide", v ? "1" : "0");
+    await invoke("island_refresh").catch(() => {});
+  };
+
+  /** 悬停展开:即存并实时推送给岛窗口 */
+  const toggleHoverCard = async (v: boolean) => {
+    setHoverCard(v);
+    await saveKey("hover_expand", v ? "1" : "0");
+    await emit("hover-expand-changed", v).catch(() => {});
+  };
+
+  /** 已勾选 Agent 的展示色(自定义 → 系统默认) */
+  const effColor = (id: string) => agentColors[id] ?? AGENT_COLORS[id];
+
+  /** 校验已勾选 Agent 间颜色不重复(颜色 = 身份);通过则落库并推送岛窗口,撞色返回 false */
+  const commitColors = async (colors: Record<string, string>, list: string[]) => {
+    const seen = new Map<string, string>();
+    for (const a of AGENT_DEFS.filter((x) => list.includes(x.id))) {
+      const c = (colors[a.id] ?? AGENT_COLORS[a.id]).toLowerCase();
+      if (seen.has(c)) {
+        setColorError(`「${seen.get(c)}」与「${a.label}」颜色相同，请改用不同颜色`);
+        return false;
+      }
+      seen.set(c, a.label);
+    }
+    setColorError("");
+    savedColorsRef.current = colors;
+    await saveKey("agent_colors", JSON.stringify(colors));
+    await emit("agents-changed", { agents: list, colors }).catch(() => {});
+    return true;
+  };
+
+  /** 勾选/取消 Agent:即存即生效;勾选集变化会改变撞色判定范围,顺带重新校验 */
+  const toggleAgent = async (id: string, checked: boolean) => {
+    const next = checked ? [...agents, id] : agents.filter((x) => x !== id);
+    setAgents(next);
+    await saveKey("agents_enabled", JSON.stringify(next));
+    await commitColors(agentColors, next);
+  };
+
+  /** 颜色选择失焦 = 改完:撞色回滚本次改动并就近提示,通过则落库 */
+  const onColorBlur = () => {
+    commitColors(agentColors, agents).then((ok) => {
+      if (!ok) setAgentColors({ ...savedColorsRef.current });
+    });
+  };
+
+  /** 恢复全部 Agent 默认身份色 */
+  const resetColors = async () => {
+    setAgentColors({});
+    await commitColors({}, agents);
+    showToast("已恢复默认颜色", "ok");
+  };
+
+  /** 平台切换:即存;重启后聚合器按新平台查询(事实写入分区副标题,不弹提示) */
+  const changeGlmBase = async (v: string) => {
+    setGlmBase(v);
+    await saveKey("glm_base", v);
+  };
+
+  /** API Key 失焦提交:留空 = 沿用已存或自动发现链,不写空值覆盖;保存后清空不回显 */
+  const commitToken = async () => {
+    const t = glmToken.trim();
+    if (!t) return;
+    setGlmToken("");
+    await saveKey("glm_token", t);
+    showToast("已保存，凭据在重启应用后生效", "ok");
+  };
+
+  /** 阈值失焦校验并落库:两个值都合法且琥珀 < 红色才写入,否则就近提示 */
+  const commitThresholds = async () => {
     const w = Number(warn);
     const d = Number(danger);
     const inRange = (v: number) => Number.isFinite(v) && v > 0 && v <= 100;
     if (!inRange(w) || !inRange(d)) {
-      setMsg("保存失败:阈值须为 0–100 的数字");
+      setThresholdError("阈值须为 1～100 的数字");
       return;
     }
     if (w >= d) {
-      setMsg("保存失败:琥珀提醒阈值须小于红色告警阈值");
+      setThresholdError("琥珀阈值须小于红色阈值");
       return;
     }
-    // Agent 身份色校验:已勾选的 Agent 之间颜色不得重复(颜色 = 身份)
-    const checked = AGENT_DEFS.filter((a) => agents.includes(a.id));
-    const effColor = (id: string) => agentColors[id] ?? AGENT_COLORS[id];
-    const seen = new Map<string, string>();
-    for (const a of checked) {
-      const c = effColor(a.id).toLowerCase();
-      if (seen.has(c)) {
-        setMsg(`保存失败:${seen.get(c)} 与 ${a.label} 的颜色相同,不同 Agent 请使用不同颜色`);
-        return;
-      }
-      seen.set(c, a.label);
-    }
-    try {
-      // Key 留空 = 沿用已存 Key 或自动发现链,不写入空值覆盖(与提示文案一致)
-      const kv: [string, string][] = [
-        ["glm_base", glmBase],
-        ["threshold_warn", warn],
-        ["threshold_danger", danger],
-        ["cleanup_days", String(cleanupDays)],
-        ["island_autohide", autoHide ? "1" : "0"],
-        ["hover_expand", hoverCard ? "1" : "0"],
-        ["agents_enabled", JSON.stringify(agents)],
-        ["agent_colors", JSON.stringify(agentColors)],
-        ["theme", themeMode],
-      ];
-      if (glmToken) kv.splice(1, 0, ["glm_token", glmToken]);
-      for (const [k, v] of kv) await invoke("set_setting", { key: k, value: v });
-      // 贴边设置即时生效:如关闭自动隐藏时岛正处于隐藏态,Rust 会把它滑回显示
-      await invoke("island_refresh").catch(() => {});
-      // 悬停展开/监控 Agent(含颜色)实时推送给岛窗口
-      await emit("hover-expand-changed", hoverCard).catch(() => {});
-      await emit("agents-changed", { agents, colors: agentColors }).catch(() => {});
-      // 主题广播给全部窗口(岛/设置/报表),即时切换无需重启
-      await emit("theme-changed", themeMode).catch(() => {});
-      setMsg("已保存;凭据与阈值将在重启应用后生效");
-      // 保存成功自动关闭设置窗口(hide:托盘可再次唤起);稍作停留让提示可感知
-      setTimeout(() => {
-        getCurrentWebviewWindow().hide().catch(() => {});
-      }, 600);
-    } catch (e) {
-      setMsg(`保存失败:${e}`);
-    }
+    setThresholdError("");
+    await saveKey("threshold_warn", warn);
+    await saveKey("threshold_danger", danger);
   };
 
+  /** Enter 直接提交(失焦提交的快捷路径) */
+  const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+  };
+
+  /** hooks 注入/卸载:本地文件操作,带 busy 态防连点 */
   const toggleHooks = async () => {
+    setHookBusy(true);
     try {
-      if (hooksOn) {
-        await invoke("uninstall_hooks");
-      } else {
-        await invoke("install_hooks");
-      }
-      setHooksOn(await invoke("hooks_status"));
-      setMsg(hooksOn ? "已停用精确状态(hooks 已卸载)" : "已启用精确状态(hooks 已注入)");
+      if (hooksOn) await invoke("uninstall_hooks");
+      else await invoke("install_hooks");
+      const on = await invoke<boolean>("hooks_status");
+      setHooksOn(on);
+      showToast(on ? "已注入 hooks：实时精确状态已启用" : "已卸载 hooks：回到启发式状态", "ok");
     } catch (e) {
-      setMsg(`操作失败:${e}`);
+      showToast(`操作失败：${e}`, "error");
+    } finally {
+      setHookBusy(false);
     }
   };
 
+  /** 开机自启:先切换 UI 再落命令,失败回滚并提示 */
   const toggleAutoStart = async (on: boolean) => {
     setAutoStart(on);
     try {
       await invoke("autostart_set", { enable: on });
     } catch (e) {
       setAutoStart(!on);
-      setMsg(`设置失败:${e}`);
+      showToast(`设置失败：${e}`, "error");
     }
   };
 
   return (
     <div className="st-root">
-      <h2 className="st-header">AgentTrackerIsland 设置</h2>
-
-      <Section title="GLM Coding Plan 凭据">
-        <label className="st-label">平台</label>
-        <select
-          className="st-input"
-          value={glmBase}
-          onChange={(e) => setGlmBase(e.target.value)}
+      {toast && (
+        <div
+          className={`st-toast${toast.kind === "error" ? " st-toast-err" : ""}`}
+          role="status"
         >
-          <option value="https://open.bigmodel.cn">智谱 BigModel(国内)</option>
-          <option value="https://api.z.ai">Z.AI(国际)</option>
-        </select>
-        <label className="st-label">
-          API Key{tokenFrom ? `(当前:${tokenFrom},留空则继续沿用)` : "(与 Claude Code 的 ANTHROPIC_AUTH_TOKEN 同值)"}
-        </label>
-        <input
-          className="st-input"
-          type="password"
-          value={glmToken}
-          placeholder="不回显;未配置时自动发现 claude-menu 配置"
-          onChange={(e) => setGlmToken(e.target.value)}
-        />
-      </Section>
-
-      <Section title="额度提醒阈值(%)">
-        <div className="st-row">
-          <div>
-            <label className="st-label">琥珀提醒</label>
-            <input className="st-input" type="number" value={warn} onChange={(e) => setWarn(e.target.value)} />
-          </div>
-          <div>
-            <label className="st-label">红色告警</label>
-            <input className="st-input" type="number" value={danger} onChange={(e) => setDanger(e.target.value)} />
-          </div>
+          {toast.text}
         </div>
+      )}
+
+      <Section title="通用" desc="应用主题与系统行为，改动即时生效">
+        <Row title="主题" desc="跟随系统时随 Windows 深浅色自动切换（窗口标题栏颜色始终随系统）">
+          <Segmented value={themeMode} onChange={changeTheme} />
+        </Row>
+        <Row title="开机自启" desc="登录 Windows 后自动启动并常驻托盘">
+          <Switch checked={autoStart} onChange={toggleAutoStart} />
+        </Row>
       </Section>
 
-      <Section title="统计数据保留">
-        <select
-          className="st-input"
-          value={cleanupDays}
-          onChange={(e) => setCleanupDays(Number(e.target.value))}
+      <Section title="灵动岛" desc="拖到屏幕上 / 左 / 右边缘可自动贴靠">
+        <Row
+          title="贴边自动隐藏"
+          desc="开启：贴靠边缘后滑出、仅露一点边缘，鼠标移入自动显示 / 关闭：贴边只吸附停靠，保持可见"
         >
-          {CLEANUP_OPTIONS.map((o) => (
-            <option key={o.days} value={o.days}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <div className="st-hint">应用启动时按周期清理历史用量/快照/事件</div>
-      </Section>
-
-      <Section title="Claude Code 精确状态(hooks)">
-        <div className="st-row st-switch" onClick={toggleHooks}>
-          <span>{hooksOn ? "已启用:实时精确状态(工作中/等待输入)" : "未启用:使用启发式状态(约 90 秒精度)"}</span>
-          <button className="st-btn">{hooksOn ? "停用并卸载" : "启用(注入 hooks)"}</button>
-        </div>
-        <div className="st-hint">注入/卸载自动备份 settings.json;停用后 Claude Code 无任何感知</div>
-      </Section>
-
-      <Section title="外观">
-        <label className="st-label">主题</label>
-        <select
-          className="st-input"
-          value={themeMode}
-          onChange={(e) => setThemeMode(asThemeMode(e.target.value))}
+          <Switch checked={autoHide} onChange={toggleAutoHide} />
+        </Row>
+        <Row
+          title="悬停展开信息卡片"
+          desc="开启：鼠标移入岛即展开卡片 / 关闭：点击展开、再点收回，移出后自动收起"
         >
-          <option value="system">跟随系统(默认)</option>
-          <option value="dark">深色</option>
-          <option value="light">浅色</option>
-        </select>
-        <div className="st-hint">
-          保存后所有窗口即时生效;跟随系统时随 Windows 深浅色自动切换(窗口标题栏颜色始终随系统)
-        </div>
+          <Switch checked={hoverCard} onChange={toggleHoverCard} />
+        </Row>
       </Section>
 
-      <Section title="灵动岛">
-        <div className="st-row st-switch" onClick={() => setAutoHide(!autoHide)}>
-          <span>
-            {autoHide
-              ? "贴边自动隐藏(默认):贴靠屏幕上/左/右边缘后滑出,仅露一点边缘,鼠标移入自动显示"
-              : "已关闭:拖到边缘只吸附停靠,保持可见"}
-          </span>
-          <input type="checkbox" checked={autoHide} readOnly />
-        </div>
-        <div className="st-row st-switch" onClick={() => setHoverCard(!hoverCard)}>
-          <span>
-            {hoverCard
-              ? "悬停自动展开(默认):鼠标移入岛即展开下方信息卡片"
-              : "点击展开:点击岛展开信息卡片,再次点击收回;移出岛后卡片自动收起"}
-          </span>
-          <input type="checkbox" checked={hoverCard} readOnly />
-        </div>
-        <label className="st-label">选择 Agent 项(勾选才采集/监控/展示该 Agent 的数据)</label>
+      <Section title="Agent 监控" desc="勾选才采集与展示，颜色用于岛分块与徽标">
         <div className="st-agents">
-          {AGENT_DEFS.map((a) => (
-            <div key={a.id} className="st-agent">
-              <label className="st-agent-check">
+          {AGENT_DEFS.map((a) => {
+            const checked = agents.includes(a.id);
+            return (
+              <div key={a.id} className="st-agent">
+                <label className="st-agent-check">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => toggleAgent(a.id, e.target.checked)}
+                  />
+                  {a.label}
+                  {!a.implemented && <span className="st-agent-todo">（适配器开发中）</span>}
+                </label>
                 <input
-                  type="checkbox"
-                  checked={agents.includes(a.id)}
+                  type="color"
+                  className="st-agent-color"
+                  title={checked ? "自定义颜色" : "勾选后可自定义颜色"}
+                  value={effColor(a.id)}
+                  disabled={!checked}
                   onChange={(e) =>
-                    setAgents((prev) =>
-                      e.target.checked ? [...prev, a.id] : prev.filter((x) => x !== a.id),
-                    )
+                    setAgentColors((prev) => ({ ...prev, [a.id]: e.target.value }))
                   }
+                  onBlur={onColorBlur}
                 />
-                {a.label}
-                {!a.implemented && <span className="st-agent-todo">(适配器开发中)</span>}
-              </label>
-              <input
-                type="color"
-                className="st-agent-color"
-                title="Agent 标识颜色"
-                value={agentColors[a.id] ?? AGENT_COLORS[a.id]}
-                onChange={(e) =>
-                  setAgentColors((prev) => ({ ...prev, [a.id]: e.target.value }))
-                }
-              />
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
-        <div className="st-hint">
-          颜色用于隐藏态分块与信息面板徽标,不同 Agent 请使用不同颜色;拖动灵动岛到屏幕边缘自动贴靠
+        {colorError && <div className="st-row-error">{colorError}</div>}
+        <div className="st-agent-foot">
+          <button type="button" className="st-btn st-btn-sm" onClick={resetColors}>
+            恢复默认颜色
+          </button>
         </div>
       </Section>
 
-      <Section title="开机自启">
-        <div className="st-row st-switch" onClick={() => toggleAutoStart(!autoStart)}>
-          <span>{autoStart ? "开机自动启动" : "开机不启动(默认)"}</span>
-          <input type="checkbox" checked={autoStart} readOnly />
-        </div>
+      <Section title="额度与凭据" desc="GLM Coding Plan 额度查询，凭据与阈值重启后生效">
+        <Row title="平台" desc="额度接口所属站点">
+          <select
+            className="st-input st-input-sm"
+            value={glmBase}
+            onChange={(e) => changeGlmBase(e.target.value)}
+          >
+            <option value="https://open.bigmodel.cn">智谱 BigModel（国内）</option>
+            <option value="https://api.z.ai">Z.AI（国际）</option>
+          </select>
+        </Row>
+        <Row
+          title="API Key"
+          badge={tokenFrom ? <Badge on text={tokenFrom} /> : <Badge on={false} text="未配置" />}
+          desc="与 Claude Code 的 ANTHROPIC_AUTH_TOKEN 同值，留空则沿用现有配置或自动发现（env / claude-menu）"
+          tall
+        >
+          <div className="st-token">
+            <input
+              className="st-input"
+              type={showToken ? "text" : "password"}
+              value={glmToken}
+              placeholder="输入新 Key，失焦自动保存"
+              onChange={(e) => setGlmToken(e.target.value)}
+              onBlur={commitToken}
+              onKeyDown={blurOnEnter}
+            />
+            <button
+              type="button"
+              className="st-eye"
+              title={showToken ? "隐藏" : "显示"}
+              onClick={() => setShowToken(!showToken)}
+            >
+              <EyeIcon off={!showToken} />
+            </button>
+          </div>
+        </Row>
+        <Row
+          title="额度提醒阈值（%）"
+          desc="已用额度达到琥珀阈值开始提醒，达到红色阈值转为告警，重启后生效"
+          error={thresholdError}
+        >
+          <div className="st-th">
+            <i className="st-dot st-dot-amber" />
+            <input
+              className="st-input st-input-num"
+              type="number"
+              min={1}
+              max={100}
+              value={warn}
+              onChange={(e) => setWarn(e.target.value)}
+              onBlur={commitThresholds}
+              onKeyDown={blurOnEnter}
+              aria-label="琥珀提醒阈值"
+            />
+          </div>
+          <div className="st-th">
+            <i className="st-dot st-dot-red" />
+            <input
+              className="st-input st-input-num"
+              type="number"
+              min={1}
+              max={100}
+              value={danger}
+              onChange={(e) => setDanger(e.target.value)}
+              onBlur={commitThresholds}
+              onKeyDown={blurOnEnter}
+              aria-label="红色告警阈值"
+            />
+          </div>
+        </Row>
       </Section>
 
-      <div className="st-footer">
-        <span className="st-msg">{msg}</span>
-        <button className="st-btn st-primary" onClick={save}>
-          保存
-        </button>
-      </div>
+      <Section title="数据与维护" desc="历史数据清理与 Claude Code 状态接入">
+        <Row title="统计数据保留时长" desc="应用启动时按周期清理历史用量 / 快照 / 事件">
+          <select
+            className="st-input st-input-sm"
+            value={cleanupDays}
+            onChange={(e) => {
+              const days = Number(e.target.value);
+              setCleanupDays(days);
+              saveKey("cleanup_days", String(days));
+            }}
+          >
+            {CLEANUP_OPTIONS.map((o) => (
+              <option key={o.days} value={o.days}>
+                {o.days === CLEANUP_DEFAULT_DAYS ? `${o.label}（默认）` : o.label}
+              </option>
+            ))}
+          </select>
+        </Row>
+        <Row
+          title="Claude Code 精确状态"
+          badge={<Badge on={hooksOn} text={hooksOn ? "已启用" : "未启用"} />}
+          desc="启用：hooks 实时上报（工作中 / 等待输入） / 未启用：按进程启发式推断，约 90 秒精度。注入 / 卸载均自动备份 settings.json"
+        >
+          <button type="button" className="st-btn" disabled={hookBusy} onClick={toggleHooks}>
+            {hookBusy ? "处理中…" : hooksOn ? "卸载还原" : "注入 hooks"}
+          </button>
+        </Row>
+      </Section>
     </div>
   );
 }

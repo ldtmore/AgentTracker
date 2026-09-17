@@ -18,6 +18,9 @@ pub struct GlmProvider {
     base: String,
     /// Coding Plan API key(与 ANTHROPIC_AUTH_TOKEN 同值)
     token: String,
+    /// 复用的 blocking 客户端(审查 2.2.5):每 5min 一次的查询共享连接池与
+    /// TLS 会话,替代旧的"每次请求新建 Client";自带 5s 超时
+    http: reqwest::blocking::Client,
 }
 
 /// 凭据发现结果:来自设置/环境变量/claude-menu 配置
@@ -33,6 +36,10 @@ impl GlmProvider {
         Self {
             base: base.trim_end_matches('/').to_string(),
             token: token.to_string(),
+            http: reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_else(|_| reqwest::blocking::Client::new()),
         }
     }
 
@@ -68,18 +75,30 @@ impl ProviderAdapter for GlmProvider {
 
     fn fetch_quota(&self) -> anyhow::Result<Vec<QuotaRow>> {
         let url = format!("{}/api/monitor/usage/quota/limit", self.base);
-        let resp = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(5))
-            .build()?
-            .get(&url)
-            .header("Authorization", &self.token)
-            .header("Accept", "application/json")
-            .send()?;
-        if !resp.status().is_success() {
-            anyhow::bail!("GLM 额度接口 HTTP {}", resp.status());
+        // 失败必须留痕(审查 1.1):此处降级为"显示最近快照",但不允许无痕降级
+        let result = (|| -> anyhow::Result<Vec<QuotaRow>> {
+            let resp = self
+                .http
+                .get(&url)
+                .header("Authorization", &self.token)
+                .header("Accept", "application/json")
+                .send()?;
+            if !resp.status().is_success() {
+                anyhow::bail!("GLM 额度接口 HTTP {}", resp.status());
+            }
+            let body: QuotaResponse = resp.json()?;
+            parse_quota(&body)
+        })();
+        match result {
+            Ok(rows) => {
+                log::debug!("GLM 额度查询成功: {} 条", rows.len());
+                Ok(rows)
+            }
+            Err(e) => {
+                log::warn!("GLM 额度查询失败(降级为最近快照): {e}");
+                Err(e)
+            }
         }
-        let body: QuotaResponse = resp.json()?;
-        parse_quota(&body)
     }
 }
 
@@ -142,6 +161,8 @@ struct LimitItem {
     usage: Option<i64>,
     #[serde(default)]
     #[serde(rename = "currentValue")]
+    /// 已用绝对量:无 total 无法换算百分比,仅留档(见 calc_percent 注释)
+    #[allow(dead_code)]
     current_value: Option<i64>,
     #[serde(default)]
     remaining: Option<i64>,

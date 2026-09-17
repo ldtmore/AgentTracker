@@ -145,7 +145,7 @@ CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT);
 
 数据清理(设置项):按 `usage_records.ts`/`quota_snapshots.fetched_at`/
 `status_events.ts` 滚动删除(启动时按周期执行一次),
-周期:永不(默认)/3年/2年/1年/6月/3月/1月/1周。
+周期:1 年(默认,2026-09-17 审查改,原"永不")/3 年/2 年/1 年/6 月/3 月/1 月/1 周/永不。
 `sessions` 表不在清理范围(每会话一行,增长极慢,列入看板待议区)。
 
 ## 4. hook-bridge 事件协议(Claude Code 增强档)
@@ -159,6 +159,9 @@ CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT);
 - hook-bridge.js:stdin 读 JSON → append `{"ts":...,"hook":...,"session_id":...,
   "tool_name":?,"message":?}` → 退出
   (不连端口不找进程;主程序死活无关——红线②)
+  > 📌 审查回写(2026-09-17):事件文件消费改为 seek 增量读(不再整文件进内存);
+  > 修复"文件重建后 total<offset 导致消费永久失明"bug;新增 8MB 轮转
+  > (已消费完才滚动为 `.jsonl.old`,偏移归零)。详见 §8-②。
   > 📌 T6 实测回写(2026-09-16):事件名不带命令行参数,从 stdin 的
   > `hook_event_name` 读取;stdin 无 model 字段,协议已去 model(模型信息由 T4
   > 转录解析补齐);桥脚本落盘位置为 `~\.claude\hooks\`(单一已知位置,用户可审计)
@@ -199,16 +202,33 @@ CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT);
 > (Aggregator 跳过未勾选 Agent 的扫描与采集,设置键缺省=全启用);额度耗尽不改写
 > 会话状态,由快照 quota_exhausted 驱动胶囊变红/弧线红/红光边框。
 
-## 6. 设置页(内嵌 WebView 路由 #settings)
+## 6. 设置页(内嵌 WebView 路由 #settings;2026-09-17 布局与交互重构)
 
-- GLM 平台(bigmodel/z.ai)+ key(密码框不回显;留空保存=沿用已存/自动发现链,不覆盖);
-- 额度提醒阈值(80/95,琥珀须小于红色);统计数据保留周期(8 档);
-- Claude Code hooks 安装/卸载;开机自启(默认关);
-- 外观(M1-4):主题三选一 system(默认)/dark/light,存 app_settings `theme` 键,
-  保存后 emit theme-changed 广播,岛/设置/报表三窗口即时切换;
+- **交互模型:设置项即时生效**——改动即存即落地(去除"保存"按钮与保存后自动关窗);
+  文本输入(Key/阈值)失焦提交,Enter 等价失焦;hooks/自启本就点击即生效,心智统一
+- **布局:分区卡片 + 统一设置行**——分区头为主标题 + 副标题**同行**(基线对齐,
+  均不换行,窗口最小宽度按最宽一条副标题实测文字宽度设下限);
+  每行 = 固定标题(+状态徽标)+ 固定描述 + 右侧控件,文案不随选中态变化
+  (遵循 Fluent 开关文案规范);五节按使用频率排列:
+  通用(主题、开机自启)→ 灵动岛(贴边隐藏/悬停展开)→ Agent 监控(勾选+身份色,
+  自灵动岛节拆出,未勾选行颜色置灰禁用,附"恢复默认颜色")→ 额度与凭据
+  (平台/API Key/提醒阈值)→ 数据与维护(保留时长 7 档按时长降序:12 个月(默认)/6 个月/
+  3 个月/1 个月/15 天/7 天/1 天,旧档位存储值回落默认/Claude Code hooks);
+  校验错误就近显示在出错行正下方(颜色撞色/阈值非法),操作结果用顶部 toast
+  (成功 2.5s 自动消失,失败常驻);"重启后生效"的事实(凭据/阈值)写入分区副标题
+- 各节要点:GLM 平台(bigmodel/z.ai)+ key(密码框不回显、眼睛切明文、保存后清空输入框,
+  留空=沿用已存/自动发现链不覆盖,来源徽标展示 glm_token_source);
+  额度提醒阈值(80/95,琥珀须小于红色,前置色点标识);
+- 外观(M1-4):主题三档分段控件 system(默认)/dark/light,点击即存并 emit theme-changed
+  广播(含本窗口,点击即预览),岛/设置/报表三窗口即时切换;
   跟随系统经 WebView2 PreferredColorScheme→matchMedia 感知,零 Rust 参与;
-- 灵动岛(M1-6):贴边自动隐藏开关、悬停/点击展开开关、监控 Agent 勾选与身份色自定义;
-  settings/report 窗口原生标题栏颜色跟随系统,不随主题选择(内容区跟随)。
+- 灵动岛(M1-6):贴边自动隐藏开关、悬停/点击展开开关(CSS 滑动开关控件);
+  settings/report 窗口原生标题栏颜色跟随系统,不随主题选择(内容区跟随);
+- 色板(M1-4 变量化基础上新增语义色):`--accent`/`--danger`/`--switch-off`
+  分主题定义,深浅双主题下保证开关、勾选、徽标与错误提示的对比度;
+- 界面文案一律使用中文标点(，：；（）),英文专有名内部符号与「/」「%」除外;
+- 窗口:800×600(4:3 横向),可调大小(min 520×480,宽下限含最宽副标题实测 395px
+  与行内文字可读缓冲)。
 
 ## 7. 风险与对策(实施期)
 
@@ -220,3 +240,23 @@ CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT);
 | Acrylic 在部分驱动下闪烁       | 设置项可关毛玻璃,退纯色                    |
 | settings.json 与其他工具竞争写 | 写前备份+原子写(temp+rename);冲突时提示用户手查 |
 | hooks stdin 字段与预期不符    | T6 诊断 hook 实测先行                 |
+
+## 8. 全面审查优化回写(2026-09-17,第五次会话)
+
+> 页面样式与功能初验通过后,按"架构/框架/数据安全/性能"四维全面审查,以下改动
+> 已全部落地并通过 cargo test 23/23 + npm run build;**待所有者手动验收**。
+
+| # | 级别 | 改动 | 落点 |
+|---|------|------|------|
+| ① | 🔴 | **可观测性**:新增 `logging.rs`(log 门面+std 文件后端,`%APPDATA%...\logs\agenttrackerisland.log`,1MB 滚动;`AT_LOG=debug` 开调试级)+ 全局 panic 钩子;聚合线程 tick 包 `catch_unwind`(单轮 panic 不再杀线程致岛静默冻结);**release 去 `panic="abort"`**(否则 unwind 捕获失效);采集/额度/写库失败全部留痕 | logging.rs、lib.rs、store、glm |
+| ② | 🔴 | **hook 事件文件**:seek 增量读(成本 O(新增));修复 total<offset 永久失明 bug(重建当轮归零重读);8MB 轮转 `.jsonl.old`(仅已消费完) | hook_events.rs、service.rs |
+| ③ | 🔴 | **CC 转录增量读**:per-file 字节偏移缓存(64KB 回退量配对 60s 水位余量),mtime 未变直接跳过;cwd 头部提取按 mtime 缓存(原来每 tick 每文件重读 8KB) | claude_code.rs |
+| ④ | 🟡 | **数据安全**:get_settings 不再下发 `glm_token`(以 `glm_token_set` 布尔位代替);set_setting 键白名单;**CSP 启用**(原 null;style 允许内联,connect 含 ipc 与 dev HMR ws);移除零引用的 tauri-plugin-opener(依赖/权限/前端包)+ 未用的 set-position 权限;hooks 原子写 rename 失败重试 3 次+报错指引,备份只留最近 5 份 | lib.rs、tauri.conf.json、capabilities、claude_code.rs |
+| ⑤ | 🟡 | **性能**:报表四命令改 async+spawn_blocking(原同步 command 跑主线程,大数据量冻结全部窗口);会话 token/模型批量查询(消 N+1,100 会话原为每 10s 200 次无索引扫描);迁移 0002 加 `idx_usage_session` 索引并删除未用的 watermarks.last_offset 列;sysinfo System 复用+进程枚举降频 30s;GLM Client 复用(连接池/TLS 会话) | lib.rs、store、service、glm |
+| ⑥ | 🟡 | **可靠性**:store/适配器 Mutex 中毒自恢复;insert_usage 事务失败改日志+放弃本轮(下轮重采兜底);快照新增 `degraded` 标志(连续 3 轮采集源失败置位,岛收缩态显示"采集异常") | store、claude_code、service、IslandBar |
+| ⑦ | 🟢 | **打磨**:限流关键词收紧("额度/频率"须与状态词组合,防普通通知误判 error);report_slice 静态 SQL 取代 format! 拼列;`lbutton_down` 补 SAFETY 注释;聚合器改适配器注册表(`Vec<Box<dyn AgentAdapter>>`);滑动动画超时由独立兜底线程改为时间戳自复位;数据保留默认"永不"→"1 年" | state、store、lib.rs、Settings.tsx |
+
+> 自库幂等键口径注记:UNIQUE(agent, session_id, ts, model) 意味着同毫秒同模型的
+> 两条不同消息会合并保留最大快照——与 ccusage 同口径,极低频,接受(审查 3.4)。
+> 已知未做:clippy 未安装(网络不可达,恢复后 `rustup component add clippy` 补跑);
+> glm_token 明文落库维持现状(与同类工具一致,DPAPI 加密列 M2 可选)。

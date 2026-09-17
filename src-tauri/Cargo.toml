@@ -19,11 +19,12 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 anyhow = "1.0.104"
+# 日志门面(tauri 传递依赖已入树,零新增下载;std feature 供自实现文件后端)
+log = { version = "0.4", features = ["std"] }
 chrono = "0.4.45"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "json", "rustls"] }
 sysinfo = "0.39.6"
@@ -37,5 +38,6 @@ tauri-plugin-autostart = "2.5.1"
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# 不用 abort(2026-09-17 审查):聚合线程的 panic 隔离依赖 unwind(catch_unwind),
+# 常驻工具"单线程故障不整体退出"优先于二进制体积
 strip = true
