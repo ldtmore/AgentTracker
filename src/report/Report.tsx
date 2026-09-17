@@ -17,6 +17,7 @@ import {
 import { CanvasRenderer } from "echarts/renderers";
 import Chart from "./Chart";
 import { fmtTokens } from "../shared/types";
+import { useTheme } from "../shared/theme";
 import "./report.css";
 
 // 按需注册用到的图表与组件(01-RESEARCH §9,减小 bundle)
@@ -71,10 +72,10 @@ const STACK = [
   { key: "cache_creation" as const, name: "缓存写", color: "#fbbf24" },
 ];
 
-const AXIS_TEXT = { color: "#9ca3af" };
 const PIE_COLORS = ["#34d399", "#60a5fa", "#a78bfa", "#fbbf24", "#f87171", "#38bdf8", "#f472b6"];
 
 export default function Report() {
+  const theme = useTheme();
   const [days, setDays] = useState(30);
   const [daily, setDaily] = useState<DayUsage[]>([]);
   const [models, setModels] = useState<SliceUsage[]>([]);
@@ -108,21 +109,27 @@ export default function Report() {
     };
   }, [days]);
 
+  // 图表主题色(M1-4):轴线/图例文字、网格线、饼图标签随主题切换;
+  // 序列配色(STACK/PIE_COLORS/热力色阶)为高饱和色,双主题通用不再拆分
+  const axisText = { color: theme === "dark" ? "#9ca3af" : "#57606a" };
+  const splitLine = theme === "dark" ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.08)";
+  const pieLabel = theme === "dark" ? "#d1d5db" : "#424a53";
+
   // 趋势图:四项用量堆叠柱
   const trendOption = useMemo<EChartsCoreOption>(
     () => ({
       tooltip: { trigger: "axis" },
-      legend: { data: STACK.map((s) => s.name), textStyle: AXIS_TEXT, top: 0 },
+      legend: { data: STACK.map((s) => s.name), textStyle: axisText, top: 0 },
       grid: { left: 56, right: 16, top: 32, bottom: 24 },
       xAxis: {
         type: "category",
         data: daily.map((d) => d.day.slice(5)),
-        axisLabel: AXIS_TEXT,
+        axisLabel: axisText,
       },
       yAxis: {
         type: "value",
-        axisLabel: { ...AXIS_TEXT, formatter: (v: number) => fmtTokens(v) },
-        splitLine: { lineStyle: { color: "rgba(255,255,255,0.06)" } },
+        axisLabel: { ...axisText, formatter: (v: number) => fmtTokens(v) },
+        splitLine: { lineStyle: { color: splitLine } },
       },
       series: STACK.map((s) => ({
         name: s.name,
@@ -133,7 +140,7 @@ export default function Report() {
         barMaxWidth: 26,
       })),
     }),
-    [daily],
+    [daily, theme],
   );
 
   // 热力图:列=小时,行=星期,色阶=token 总量
@@ -148,10 +155,10 @@ export default function Report() {
       xAxis: {
         type: "category",
         data: Array.from({ length: 24 }, (_, i) => `${i}`),
-        axisLabel: AXIS_TEXT,
+        axisLabel: axisText,
         splitArea: { show: true },
       },
-      yAxis: { type: "category", data: WEEKDAYS, axisLabel: AXIS_TEXT },
+      yAxis: { type: "category", data: WEEKDAYS, axisLabel: axisText },
       visualMap: {
         min: 0,
         max: Math.max(max, 1),
@@ -159,7 +166,7 @@ export default function Report() {
         orient: "horizontal",
         left: "center",
         bottom: 0,
-        textStyle: AXIS_TEXT,
+        textStyle: axisText,
         inRange: { color: ["#1e3a5f", "#38bdf8", "#34d399"] },
       },
       series: [
@@ -169,7 +176,7 @@ export default function Report() {
         },
       ],
     };
-  }, [heat]);
+  }, [heat, theme]);
 
   // 占比饼图(模型/供应商共用模板)
   const pieOption = (data: SliceUsage[]): EChartsCoreOption => ({
@@ -177,7 +184,7 @@ export default function Report() {
       formatter: (p: { name: string; value: number; percent: number }) =>
         `${p.name} · ${fmtTokens(p.value)}(${p.percent}%)`,
     },
-    legend: { bottom: 0, textStyle: AXIS_TEXT, type: "scroll" },
+    legend: { bottom: 0, textStyle: axisText, type: "scroll" },
     color: PIE_COLORS,
     series: [
       {
@@ -185,7 +192,7 @@ export default function Report() {
         radius: ["38%", "66%"],
         center: ["50%", "44%"],
         data: data.map((d) => ({ name: d.label, value: d.total })),
-        label: { color: "#d1d5db", formatter: "{d}%" },
+        label: { color: pieLabel, formatter: "{d}%" },
       },
     ],
   });

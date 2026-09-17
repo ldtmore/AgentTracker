@@ -194,10 +194,32 @@
 - 待办:所有者安装并使用 Codex → 取真实 JSONL 样本实测字段 → 实现 AgentAdapter
 - 依赖:M1-1;所有者环境
 
-### M1-4 深浅双主题 ⬜(P4)
+### M1-4 深浅双主题 ✅(2026-09-17 所有者验收通过)
 
 - 内容:跟随系统+设置页自选;岛/面板/设置页/报表页色板变量化统一
-- 依赖:M1-1(避免报表页返工)
+- ✅ 代码完成(2026-09-17,纯前端 8 处,**零 Rust 改动、零新增权限**):
+  - 新增 `src/shared/theme.ts`:ThemeMode(system/dark/light,存 app_settings `theme` 键,
+    默认 system)+ useTheme Hook(启动读设置→写 `<html>` data-theme;监听设置页
+    theme-changed 广播;system 模式订阅 matchMedia 变化)
+  - 跟随系统信号链(已核对本地 wry 0.55/tauri-runtime-wry 2.11 源码):系统主题切换→
+    tao ThemeChanged→运行时 SetPreferredColorScheme 推进 WebView2→matchMedia 触发,
+    前端全程可感知,无需 Rust 参与
+  - App.css:`:root` 暗色默认(=历史值,初始无 data-theme 不闪变)+ `[data-theme="light"]`
+    浅色覆盖;23 个语义变量(文本四级/半透明面层/边框/悬停/输入框/滚动条/按钮/轨道等),
+    settings.css/report.css 全部改引变量;状态色(绿/琥珀/红)与 Agent 身份色双主题通用不变
+  - Settings.tsx:新增"外观"区块(跟随系统(默认)/深色/浅色);保存写 theme 键 +
+    emit theme-changed,三窗口(岛/设置/报表)即时生效无需重启
+  - Report.tsx:ECharts 轴文字/网格线/饼图标签随主题(useTheme);序列高饱和配色双主题共用
+- 已知限制(有意为之,后续按需):settings/report 窗口原生标题栏颜色始终跟随系统,
+  不随应用内主题选择(内容区跟随);如需标题栏联动须加 set-theme 权限,暂不做
+- 验证:npm run build 通过(echarts chunk 警告为 M1-1 已知现状);cargo test 19/19 绿
+  (Rust 零改动命中缓存);默认深色胶囊已在 dev 实例实屏确认与历史视觉一致;
+  浅色切换/跟随系统/报表图表配色**已由所有者验收通过(2026-09-17)**
+- 审查与优化(2026-09-17):全量审查未发现阻塞缺陷;修复浅色下贴边标签 hover 无反馈
+  (brightness 提亮对白色被钳制,补 `[data-theme="light"]` 悬停压暗 0.92,build 通过);
+  已知取舍:启动首帧闪变(浅色系统+system/浅色档,几十毫秒,不做);暗色两处 α 微差
+  (0.08→0.09、0.2→0.14,并入通用变量);ECharts tooltip 白底为 M1-1 现状
+- 依赖:M1-1 ✅
 
 ### M1-5 悬浮球/任务栏形态 ⬜(P5,视进度)
 

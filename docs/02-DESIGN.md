@@ -199,10 +199,16 @@ CREATE TABLE app_settings(key TEXT PRIMARY KEY, value TEXT);
 > (Aggregator 跳过未勾选 Agent 的扫描与采集,设置键缺省=全启用);额度耗尽不改写
 > 会话状态,由快照 quota_exhausted 驱动胶囊变红/弧线红/红光边框。
 
-## 6. 设置页(内嵌 WebView 路由 /settings)
+## 6. 设置页(内嵌 WebView 路由 #settings)
 
-GLM 平台(bigmodel/z.ai)+ key(密码框,存 app_settings,明文本地——与现有 CLI 同级安全);
-提醒阈值(80/95);数据清理周期;hooks 安装/卸载;开机自启(默认关)。
+- GLM 平台(bigmodel/z.ai)+ key(密码框不回显;留空保存=沿用已存/自动发现链,不覆盖);
+- 额度提醒阈值(80/95,琥珀须小于红色);统计数据保留周期(8 档);
+- Claude Code hooks 安装/卸载;开机自启(默认关);
+- 外观(M1-4):主题三选一 system(默认)/dark/light,存 app_settings `theme` 键,
+  保存后 emit theme-changed 广播,岛/设置/报表三窗口即时切换;
+  跟随系统经 WebView2 PreferredColorScheme→matchMedia 感知,零 Rust 参与;
+- 灵动岛(M1-6):贴边自动隐藏开关、悬停/点击展开开关、监控 Agent 勾选与身份色自定义;
+  settings/report 窗口原生标题栏颜色跟随系统,不随主题选择(内容区跟随)。
 
 ## 7. 风险与对策(实施期)
 

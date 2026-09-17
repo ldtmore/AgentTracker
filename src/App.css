@@ -1,4 +1,72 @@
-/* AgentTrackerIsland 灵动岛样式(暗色科技风,02-DESIGN §5) */
+/* AgentTrackerIsland 灵动岛样式(02-DESIGN §5);M1-4 起色板变量化,支持深浅双主题 */
+
+/* ===== 主题色板 =====
+   暗色为默认(:root,初始无 data-theme 时与历史版本视觉一致,避免闪变);
+   浅色经 [data-theme="light"] 覆盖,由 theme.ts 把解析结果写到 <html> 的 data-theme */
+:root {
+  /* 文本四级:主 / 次 / 弱 / 最弱 */
+  --text-1: #e8eaf0;
+  --text-2: #d1d5db;
+  --text-3: #9ca3af;
+  --text-4: #6b7280;
+  /* 岛收缩态胶囊 / 展开面板 / 贴边隐藏态标签的半透明面层(窗口本身全透明) */
+  --pill-bg: rgba(20, 20, 24, 0.72);
+  --panel-bg: rgba(20, 20, 24, 0.88);
+  --edge-tab-bg: rgba(15, 17, 22, 0.92);
+  /* 贴边标签:分段缝隙描边色(与标签底色同源,视觉上即"缝")、内发光 */
+  --edge-wedge-stroke: rgba(15, 17, 22, 0.9);
+  --edge-shadow: rgba(0, 0, 0, 0.35);
+  /* 常规窗口(设置/报表)不透明根背景 */
+  --root-bg: #141418;
+  /* 区块/卡片底色与悬停态 */
+  --surface: rgba(255, 255, 255, 0.04);
+  --surface-hover: rgba(255, 255, 255, 0.09);
+  /* 通用弱边框(卡片/面板)与强边框(输入框/按钮/色块) */
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  /* 输入框底与边 */
+  --input-bg: rgba(255, 255, 255, 0.06);
+  --input-border: rgba(255, 255, 255, 0.12);
+  /* 进度/额度轨道底(面板进度条、贴边额度发丝线共用) */
+  --track: rgba(255, 255, 255, 0.08);
+  /* 左右贴边额度弧线的轨道描边(SVG) */
+  --arc-track: rgba(255, 255, 255, 0.14);
+  /* 滚动条 */
+  --scroll-thumb: rgba(255, 255, 255, 0.15);
+  --scroll-thumb-hover: rgba(255, 255, 255, 0.28);
+  /* 常规按钮(设置/报表页)常态与悬停底色 */
+  --btn-bg: rgba(255, 255, 255, 0.08);
+  --btn-bg-hover: rgba(255, 255, 255, 0.14);
+  /* select 弹出 option 背景(原生控件不吃半透明变量) */
+  --option-bg: #1f1f26;
+}
+
+/* 浅色色板:半透明面层改白系,边框/悬停改黑系低透明度;状态色(绿/琥珀/红)双主题通用 */
+[data-theme="light"] {
+  --text-1: #1f2328;
+  --text-2: #424a53;
+  --text-3: #57606a;
+  --text-4: #6e7781;
+  --pill-bg: rgba(255, 255, 255, 0.78);
+  --panel-bg: rgba(255, 255, 255, 0.92);
+  --edge-tab-bg: rgba(255, 255, 255, 0.9);
+  --edge-wedge-stroke: rgba(255, 255, 255, 0.9);
+  --edge-shadow: rgba(0, 0, 0, 0.12);
+  --root-bg: #f5f6f8;
+  --surface: rgba(0, 0, 0, 0.03);
+  --surface-hover: rgba(0, 0, 0, 0.07);
+  --border: rgba(0, 0, 0, 0.1);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --input-bg: rgba(0, 0, 0, 0.035);
+  --input-border: rgba(0, 0, 0, 0.16);
+  --track: rgba(0, 0, 0, 0.1);
+  --arc-track: rgba(0, 0, 0, 0.18);
+  --scroll-thumb: rgba(0, 0, 0, 0.22);
+  --scroll-thumb-hover: rgba(0, 0, 0, 0.36);
+  --btn-bg: rgba(0, 0, 0, 0.06);
+  --btn-bg-hover: rgba(0, 0, 0, 0.11);
+  --option-bg: #ffffff;
+}
 
 /* 透明窗口:html/body 必须透明,形态由内部元素呈现 */
 html,
@@ -10,7 +78,7 @@ body,
   overflow: hidden;
   font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   font-size: 13px;
-  color: #e8eaf0;
+  color: var(--text-1);
   user-select: none;
 }
 
@@ -33,8 +101,8 @@ body,
   align-items: center;
   gap: 10px;
   padding: 0 18px;
-  background: rgba(20, 20, 24, 0.72);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: var(--pill-bg);
+  border: 1px solid var(--border);
 }
 
 .island > * {
@@ -46,7 +114,7 @@ body,
   cursor: pointer;
 }
 
-/* 状态灯 */
+/* 状态灯(语义色,双主题通用) */
 .dot {
   width: 10px;
   height: 10px;
@@ -129,7 +197,7 @@ body,
 .island-tokens {
   flex: none;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
 
@@ -145,8 +213,8 @@ body,
   box-sizing: border-box;
   height: 100%;
   border-radius: 16px;
-  background: rgba(20, 20, 24, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 12px 14px;
@@ -155,7 +223,7 @@ body,
 
 .panel-title {
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-3);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -164,7 +232,7 @@ body,
 
 .panel-hint {
   font-size: 11px;
-  color: #6b7280;
+  color: var(--text-4);
 }
 
 /* 会话列表(滚动区) */
@@ -183,12 +251,12 @@ body,
 }
 
 .panel-sessions::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--scroll-thumb);
   border-radius: 3px;
 }
 
 .panel-empty {
-  color: #6b7280;
+  color: var(--text-4);
   text-align: center;
   padding: 24px 0;
 }
@@ -200,12 +268,12 @@ body,
   gap: 8px;
   padding: 7px 10px;
   border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface);
   cursor: pointer; /* T10 接入跳转 */
 }
 
 .card:hover {
-  background: rgba(255, 255, 255, 0.09);
+  background: var(--surface-hover);
 }
 
 .card .dot {
@@ -213,6 +281,7 @@ body,
   height: 8px;
 }
 
+/* 徽标:灰底深字的角色不变,底色属"中性灰"双主题同值(文字恒深色保证可读) */
 .card-badge {
   flex: none;
   font-size: 10px;
@@ -226,14 +295,14 @@ body,
 .card-model {
   flex: none;
   font-size: 12px;
-  color: #d1d5db;
+  color: var(--text-2);
 }
 
 .card-project {
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  color: #9ca3af;
+  color: var(--text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -242,20 +311,20 @@ body,
 .card-state {
   flex: none;
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--text-3);
 }
 
 .card-tokens {
   flex: none;
   font-size: 11px;
-  color: #6b7280;
+  color: var(--text-4);
   font-variant-numeric: tabular-nums;
 }
 
 /* 额度区 */
 .panel-quota {
   flex: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--border);
   padding-top: 8px;
   display: flex;
   flex-direction: column;
@@ -272,14 +341,14 @@ body,
   flex: none;
   width: 44px;
   font-size: 12px;
-  color: #d1d5db;
+  color: var(--text-2);
 }
 
 .quota-bar {
   flex: 1;
   height: 8px;
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--track);
   overflow: hidden;
 }
 
@@ -325,7 +394,7 @@ body,
   flex: none;
   width: 90px;
   font-size: 11px;
-  color: #6b7280;
+  color: var(--text-4);
   font-variant-numeric: tabular-nums;
 }
 
@@ -334,15 +403,15 @@ body,
 .edge-tab {
   position: absolute;
   box-sizing: border-box;
-  background: rgba(15, 17, 22, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: var(--edge-tab-bg);
+  border: 1px solid var(--border-strong);
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden; /* 分段条被容器圆角裁切,首尾段贴合隐藏态边缘 */
   /* 用内发光代替外阴影:外阴影伸出窗口矩形的部分会被裁平,
      在圆角外沿形成"发虚的直角" */
-  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 0 8px var(--edge-shadow);
   cursor: pointer;
   transition: filter 0.15s ease, border-color 0.15s ease;
 }
@@ -350,6 +419,11 @@ body,
 /* 悬停提亮(标签本身的微交互反馈) */
 .edge-tab:hover {
   filter: brightness(1.35);
+}
+
+/* 浅色下白色标签提亮被钳制(白→白无反馈),改为轻微压暗,与深色提亮对称 */
+[data-theme="light"] .edge-tab:hover {
+  filter: brightness(0.92);
 }
 
 .edge-tab * {
@@ -464,7 +538,7 @@ body,
   right: 0;
   bottom: 0;
   height: 2px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--track);
 }
 
 .edge-quota-fill {
@@ -480,7 +554,7 @@ body,
 }
 
 .edge-wedge {
-  stroke: rgba(15, 17, 22, 0.9);
+  stroke: var(--edge-wedge-stroke);
   stroke-width: 1;
   transition: opacity 0.3s ease;
 }
@@ -518,6 +592,6 @@ body,
 
 .edge-arc-track {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.14);
+  stroke: var(--arc-track);
   stroke-width: 3;
 }

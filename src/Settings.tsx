@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { AGENT_COLORS, AGENT_DEFS } from "./shared/types";
+import { asThemeMode, useTheme, type ThemeMode } from "./shared/theme";
 import "./settings.css";
 
 /** 数据清理周期选项(天;0=永不清理) */
@@ -48,7 +49,11 @@ export default function Settings() {
   const [agents, setAgents] = useState<string[]>(AGENT_DEFS.map((a) => a.id));
   // Agent 自定义身份色(未自定义的用系统默认色;隐藏态色块/面板徽标共用)
   const [agentColors, setAgentColors] = useState<Record<string, string>>({});
+  // 主题模式(M1-4:跟随系统/深色/浅色,保存后即时生效无需重启)
+  const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [msg, setMsg] = useState("");
+  // 主题应用与跟随(设置页自身也随保存广播即时切换)
+  useTheme();
 
   useEffect(() => {
     (async () => {
@@ -62,6 +67,7 @@ export default function Settings() {
         if (s.glm_token_source) setTokenFrom(s.glm_token_source);
         if (s.island_autohide !== undefined) setAutoHide(s.island_autohide !== "0");
         if (s.hover_expand !== undefined) setHoverCard(s.hover_expand !== "0");
+        setThemeMode(asThemeMode(s.theme));
         if (s.agents_enabled) {
           try {
             const list = JSON.parse(s.agents_enabled) as string[];
@@ -122,6 +128,7 @@ export default function Settings() {
         ["hover_expand", hoverCard ? "1" : "0"],
         ["agents_enabled", JSON.stringify(agents)],
         ["agent_colors", JSON.stringify(agentColors)],
+        ["theme", themeMode],
       ];
       if (glmToken) kv.splice(1, 0, ["glm_token", glmToken]);
       for (const [k, v] of kv) await invoke("set_setting", { key: k, value: v });
@@ -130,6 +137,8 @@ export default function Settings() {
       // 悬停展开/监控 Agent(含颜色)实时推送给岛窗口
       await emit("hover-expand-changed", hoverCard).catch(() => {});
       await emit("agents-changed", { agents, colors: agentColors }).catch(() => {});
+      // 主题广播给全部窗口(岛/设置/报表),即时切换无需重启
+      await emit("theme-changed", themeMode).catch(() => {});
       setMsg("已保存;凭据与阈值将在重启应用后生效");
       // 保存成功自动关闭设置窗口(hide:托盘可再次唤起);稍作停留让提示可感知
       setTimeout(() => {
@@ -224,6 +233,22 @@ export default function Settings() {
           <button className="st-btn">{hooksOn ? "停用并卸载" : "启用(注入 hooks)"}</button>
         </div>
         <div className="st-hint">注入/卸载自动备份 settings.json;停用后 Claude Code 无任何感知</div>
+      </Section>
+
+      <Section title="外观">
+        <label className="st-label">主题</label>
+        <select
+          className="st-input"
+          value={themeMode}
+          onChange={(e) => setThemeMode(asThemeMode(e.target.value))}
+        >
+          <option value="system">跟随系统(默认)</option>
+          <option value="dark">深色</option>
+          <option value="light">浅色</option>
+        </select>
+        <div className="st-hint">
+          保存后所有窗口即时生效;跟随系统时随 Windows 深浅色自动切换(窗口标题栏颜色始终随系统)
+        </div>
       </Section>
 
       <Section title="灵动岛">

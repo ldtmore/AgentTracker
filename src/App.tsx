@@ -13,6 +13,7 @@ import Panel from "./island/Panel";
 import EdgeTab from "./island/EdgeTab";
 import Settings from "./Settings";
 import { AGENT_DEFS, setAgentColors } from "./shared/types";
+import { useTheme } from "./shared/theme";
 import type { IslandSnapshot, Thresholds } from "./shared/types";
 import "./App.css";
 
@@ -39,6 +40,8 @@ function sanitizeThresholds(warn: unknown, danger: unknown): Thresholds {
 }
 
 function IslandApp() {
+  // 主题应用与跟随(M1-4):结果写 <html> 的 data-theme,CSS 变量自动切换;岛无需感知返回值
+  useTheme();
   const [snap, setSnap] = useState<IslandSnapshot | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
