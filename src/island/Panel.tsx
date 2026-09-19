@@ -17,10 +17,10 @@ import {
   fmtCountdownCN,
   fmtRelative,
   fmtTokens,
+  quotaLevel,
 } from "../shared/types";
 import Tip from "../shared/Tip";
 import { ChipIcon, FolderIcon, ReportIcon } from "../shared/icons";
-import { quotaLevel } from "./IslandBar";
 
 /** Agent 徽标文字 */
 const AGENT_BADGE: Record<string, string> = {

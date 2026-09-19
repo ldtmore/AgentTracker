@@ -14,8 +14,7 @@
  * 都没有稳定展示时机。额度与状态详情由滑入后的胶囊 tooltip 承接
  */
 import type { IslandSnapshot, SessionState, Thresholds } from "../shared/types";
-import { agentColor, tensestQuota } from "../shared/types";
-import { quotaLevel } from "./IslandBar";
+import { agentColor, quotaLevel, tensestQuota } from "../shared/types";
 import { BangIcon } from "../shared/icons";
 
 /** 按 Agent 聚合最严重状态，等宽分段（大小不编码信息）；

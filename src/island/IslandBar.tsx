@@ -12,7 +12,7 @@
 import { useRef } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { IslandSnapshot, Thresholds } from "../shared/types";
-import { fmtCountdownCN, fmtTokens, tensestQuota, windowLabel } from "../shared/types";
+import { fmtCountdownCN, fmtTokens, quotaLevel, tensestQuota, windowLabel } from "../shared/types";
 import { WarnIcon } from "../shared/icons";
 
 /** 单击/拖拽判定的位移阈值（逻辑像素）：按下后移动超过该值才算拖拽 */
@@ -29,17 +29,6 @@ const ISLAND_META: Record<
   any_waiting: { dot: "dot-amber", label: "有会话等待输入" },
   any_error: { dot: "dot-red pulse", label: "有会话出错 / 额度耗尽" },
 };
-
-/** 额度百分比对应的警示等级（阈值来自设置页，R5；静默提醒，不弹窗不出声） */
-export function quotaLevel(
-  pct: number,
-  warn: number,
-  danger: number,
-): "normal" | "warn" | "danger" {
-  if (pct >= danger) return "danger";
-  if (pct >= warn) return "warn";
-  return "normal";
-}
 
 /** 主文案（C2"现在时"方案）：只列非零的活跃计数，按出错 > 等待 > 工作中排序；
  *  额度耗尽并入文案（与红灯语义对齐）；状态词全行只出现一次（修 C1 重复） */

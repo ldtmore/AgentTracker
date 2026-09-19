@@ -195,3 +195,17 @@ export function tensestQuota(quotas: QuotaView[]): QuotaView | null {
     return b.window_kind === "5h" ? b : a;
   });
 }
+
+/**
+ * 额度百分比对应的警示等级（阈值来自设置页，R5；静默提醒，不弹窗不出声）。
+ * 2026-09-20 自 IslandBar 挪入共享模块：托盘菜单额度行复用同一判定，避免阈值语义分叉
+ */
+export function quotaLevel(
+  pct: number,
+  warn: number,
+  danger: number,
+): "normal" | "warn" | "danger" {
+  if (pct >= danger) return "danger";
+  if (pct >= warn) return "warn";
+  return "normal";
+}

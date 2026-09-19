@@ -26,6 +26,8 @@ import "./App.css";
 const Report = lazy(() => import("./report/Report"));
 // 关于页 lazy 分割：与报表页同款——独立窗口独立加载，岛窗口 bundle 不受影响
 const About = lazy(() => import("./about/About"));
+// 托盘菜单页 lazy 分割：托盘右键弹出的自绘菜单（M1-9），独立窗口独立加载
+const TrayMenu = lazy(() => import("./traymenu/TrayMenu"));
 
 /** 岛自适应尺寸（Rust island_metrics：显示器逻辑宽 × 30%，夹取 380–800） */
 interface IslandMetrics {
@@ -370,10 +372,17 @@ function filterSnap(
   return { ...snap, sessions: snap.sessions.filter((s) => agents.includes(s.agent)) };
 }
 
-/** 按 URL hash 分流：设置窗口 / 报表窗口 / 关于窗口 / 灵动岛窗口 */
+/** 按 URL hash 分流：设置窗口 / 报表窗口 / 关于窗口 / 托盘菜单窗口 / 灵动岛窗口 */
 function App() {
   if (window.location.hash === "#settings") {
     return <Settings />;
+  }
+  if (window.location.hash === "#tray-menu") {
+    return (
+      <Suspense fallback={null}>
+        <TrayMenu />
+      </Suspense>
+    );
   }
   if (window.location.hash === "#report") {
     return (

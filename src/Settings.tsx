@@ -40,6 +40,10 @@ const CLEANUP_OPTIONS: { label: string; days: number }[] = [
 /** 默认保留时长（12 个月；与后端清理默认值 365 天一致） */
 const CLEANUP_DEFAULT_DAYS = 365;
 
+/** 托盘左键动作（与 Rust 端 tray_left_action 同源约定）：none=无操作（默认档） */
+type TrayLeftAction = "none" | "toggle" | "menu";
+const TRAY_LEFT_DEFAULT: TrayLeftAction = "none";
+
 /** 分区卡片：主标题 + 副标题同行（主/副标题关系），下方为设置行列表 */
 function Section({
   title,
@@ -211,6 +215,8 @@ export default function Settings() {
   const [colorError, setColorError] = useState("");
   // 主题模式（跟随系统/深色/浅色，点击即切换全窗口预览）
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
+  // 托盘左键动作（缺省=无操作，与 Rust 端 tray_left_action 的默认一致；右键恒为菜单）
+  const [trayLeft, setTrayLeft] = useState<TrayLeftAction>(TRAY_LEFT_DEFAULT);
   // 顶部 toast：成功 2.5s 自动消失，失败常驻
   const [toast, setToast] = useState<{ text: string; kind: "ok" | "error" } | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -241,6 +247,10 @@ export default function Settings() {
         if (s.island_opacity !== undefined) setIslandOpacity(asIslandOpacity(s.island_opacity));
         if (s.dev_mode !== undefined) setDevMode(s.dev_mode === "1");
         setThemeMode(asThemeMode(s.theme));
+        // 未设置/脏值一律回落默认「无操作」（与 Rust 端 _ => "none" 同源）
+        if (s.tray_left_action === "none" || s.tray_left_action === "toggle" || s.tray_left_action === "menu") {
+          setTrayLeft(s.tray_left_action);
+        }
         if (s.agents_enabled) {
           try {
             const list = JSON.parse(s.agents_enabled) as string[];
@@ -298,6 +308,12 @@ export default function Settings() {
     setThemeMode(mode);
     await saveKey("theme", mode);
     await emit("theme-changed", mode).catch(() => {});
+  };
+
+  /** 托盘左键动作：即存即生效（托盘点击时 Rust 实时读库，无需广播） */
+  const changeTrayLeft = async (v: TrayLeftAction) => {
+    setTrayLeft(v);
+    await saveKey("tray_left_action", v);
   };
 
   /** 贴边自动隐藏：即存即生效；关掉时若岛正处于隐藏态，Rust 会把它滑回显示 */
@@ -489,6 +505,18 @@ export default function Settings() {
         </Row>
         <Row title="开机自启" desc="登录 Windows 后自动启动并常驻托盘">
           <Switch checked={autoStart} onChange={toggleAutoStart} />
+        </Row>
+        <Row title="托盘左键" desc="单击托盘图标的动作；右键始终打开托盘菜单，双击不响应">
+          <Segmented
+            value={trayLeft}
+            onChange={changeTrayLeft}
+            ariaLabel="托盘左键动作"
+            options={[
+              { value: "none", label: "无操作" },
+              { value: "toggle", label: "显隐灵动岛" },
+              { value: "menu", label: "打开菜单" },
+            ]}
+          />
         </Row>
       </Section>
 

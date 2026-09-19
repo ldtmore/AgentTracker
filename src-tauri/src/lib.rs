@@ -133,6 +133,7 @@ const SETTING_KEYS_ALLOW: &[&str] = &[
     "island_autohide",
     "island_opacity",
     "hover_expand",
+    "tray_left_action",
     "agents_enabled",
     "agent_colors",
     "theme",
@@ -659,7 +660,7 @@ fn peek_apply(
         to
     );
     // 先取值再放锁再广播：MutexGuard 实现 Drop 会活到函数末尾，持锁调用任何
-    // 会再 lock motion 的函数（如 refresh_toggle_text）都会同线程自锁——motion
+    // 又会 lock motion 的函数都会同线程自锁——motion
     // 永久被持有后主线程 Moved 处理器拿锁阻塞，全 UI 冻结（2026-09-18 实测教训）
     let (edge_s, hidden_s) = {
         let m = motion.lock().unwrap();
@@ -741,7 +742,7 @@ fn apply_snap(
     // 状态迁移留痕（排障主线索："岛不贴边/位置不对/消失"靠它重建时间线）
     log::debug!("[岛] 拖放吸附：edge={} hidden={} 落点 {:?}", edge, hide, to);
     // 先取值再放锁再广播：MutexGuard 实现 Drop 会活到函数末尾，持锁调用任何
-    // 会再 lock motion 的函数（如 refresh_toggle_text）都会同线程自锁——motion
+    // 又会 lock motion 的函数都会同线程自锁——motion
     // 永久被持有后主线程 Moved 处理器拿锁阻塞，全 UI 冻结（2026-09-18 实测教训）
     let (edge_s, hidden_s) = {
         let m = motion.lock().unwrap();
@@ -833,6 +834,7 @@ pub fn run() {
             island_dock_state,
             island_drag_start,
             island_metrics,
+            tray_menu_action,
             log_frontend
         ])
         .setup(|app| {
@@ -988,8 +990,8 @@ pub fn run() {
                 }
             }
 
-            // 设置/报表/关于窗口：关闭即隐藏（而非销毁），保证托盘可反复唤起
-            for label in ["settings", "report", "about"] {
+            // 设置/报表/关于/托盘菜单窗口：关闭即隐藏（而非销毁），保证托盘可反复唤起
+            for label in ["settings", "report", "about", "tray-menu"] {
                 if let Some(w) = app.get_webview_window(label) {
                     let w2 = w.clone();
                     w.on_window_event(move |ev| {
@@ -999,6 +1001,17 @@ pub fn run() {
                         }
                     });
                 }
+            }
+
+            // 托盘菜单失焦即收（B1 焦点策略）：点击外部/切走焦点 → 隐藏。
+            // hide 是幂等窗口操作，无需防抖；Esc 与菜单项选中由前端自隐补充
+            if let Some(tm) = app.get_webview_window("tray-menu") {
+                let tm2 = tm.clone();
+                tm.on_window_event(move |ev| {
+                    if let tauri::WindowEvent::Focused(false) = ev {
+                        let _ = tm2.hide();
+                    }
+                });
             }
 
             build_tray(app)?;
@@ -1055,61 +1068,146 @@ fn position_island(
     slide_to(win, pos, mon.scale_factor(), motion, Slide::Jump);
 }
 
-/// 托盘"灵动岛"菜单项句柄：窗口可见性变化后据此刷新菜单文案
-struct TrayToggle(tauri::menu::MenuItem<tauri::Wry>);
+// ===== 托盘菜单（webview 自绘，M1-9） =====
+// 原生托盘菜单（muda → Win32 弹出菜单）的行高/间距/字体全部由系统决定，muda 无
+// 样式 API（已核对 0.19.3 源码，图标位图亦硬编码 16×16），"更舒展精致"在原生菜单
+// 内无解。改为无边框置顶小窗（#tray-menu，tauri.conf.json）自绘：行高/间距/圆角/
+// 动效/双主题全部可控，样式只引用岛面板的 CSS 变量体系。菜单动作与岛显隐共用
+// 同一批内部函数（单一事实源，见 tray_menu_action）；显隐语义不变（隐藏=彻底
+// 消失/显示=临时召唤，玩游戏前一键隐藏玩完召回的场景照旧），见 toggle_island。
 
-/// 系统托盘：常驻核心；菜单三组经分隔线隔离——岛操作（显示/隐藏）｜
-/// 开窗（报表/设置/关于）｜退出，操作逻辑不同的组各自归拢便于区分。
-/// 显隐语义（2026-09-18 与所有者确认）："隐藏"=任意可见态（胶囊或贴边标签）
-/// 一键彻底消失；"显示"=临时召唤——先以胶囊态亮出位置提醒（贴边标签太小，
-/// 用户游戏后未必记得贴在哪），贴边停靠则 3s 后自动滑出收回。
-/// 典型场景：玩游戏前一键隐藏、玩完一键召回，全程监控不断
+/// 托盘左键动作（设置项 tray_left_action）：none=无操作（默认）｜toggle=显隐灵动岛｜
+/// menu=打开托盘菜单。右键恒为打开托盘菜单，不进设置（Windows 托盘通用惯例）
+fn tray_left_action(store: &Store) -> &'static str {
+    match store.get_setting("tray_left_action").as_deref() {
+        Some("toggle") => "toggle",
+        Some("menu") => "menu",
+        _ => "none",
+    }
+}
+
+/// 托盘菜单落点（物理像素）：从托盘图标矩形向屏幕内侧弹出——任务栏在底/顶时
+/// 垂直弹出（菜单水平中心对齐图标中心），在左/右时水平弹出（垂直中心对齐），
+/// 最后整体夹取进显示器矩形。任务栏所在边 = 图标中心距哪条屏幕边最近；
+/// 平局优先级 底 > 顶 > 左 > 右。独立纯函数便于几何单测
+fn tray_menu_pos(
+    icon: (i32, i32, i32, i32), // 托盘图标矩形 x y w h（物理）
+    menu: (i32, i32),           // 菜单窗口尺寸 w h（物理）
+    mon: (i32, i32, i32, i32),  // 显示器矩形 x y w h（物理）
+    gap: i32,                   // 菜单与托盘图标的间距
+) -> (i32, i32) {
+    let (ix, iy, iw, ih) = icon;
+    let (mw, mh) = menu;
+    let (mx, my, mo_w, mo_h) = mon;
+    let (icx, icy) = (ix + iw / 2, iy + ih / 2);
+    let (dl, dr) = (icx - mx, mx + mo_w - icx);
+    let (dt, db) = (icy - my, my + mo_h - icy);
+    let (mut x, mut y) = if db <= dt && db <= dl && db <= dr {
+        (icx - mw / 2, iy - gap - mh) // 任务栏在底：菜单向上弹
+    } else if dt <= dl && dt <= dr {
+        (icx - mw / 2, iy + ih + gap) // 任务栏在顶：向下弹
+    } else if dl <= dr {
+        (ix + iw + gap, icy - mh / 2) // 任务栏在左：向右弹
+    } else {
+        (ix - gap - mw, icy - mh / 2) // 任务栏在右：向左弹
+    };
+    // 夹取进显示器（菜单远小于屏幕，clamp 两侧不会越界成 min>max）
+    x = x.clamp(mx, mx + mo_w - mw);
+    y = y.clamp(my, my + mo_h - mh);
+    (x, y)
+}
+
+/// 光标点所在显示器：托盘事件矩形是物理坐标，而菜单窗口隐藏时 current_monitor
+/// 不可靠，按"图标中心落在哪块屏"定位所属显示器
+fn monitor_at(app: &tauri::AppHandle, pt: (f64, f64)) -> Option<tauri::Monitor> {
+    app.available_monitors().ok()?.into_iter().find(|m| {
+        let p = m.position();
+        let s = m.size();
+        let (x1, y1) = (p.x as f64, p.y as f64);
+        let (x2, y2) = (x1 + s.width as f64, y1 + s.height as f64);
+        pt.0 >= x1 && pt.0 < x2 && pt.1 >= y1 && pt.1 < y2
+    })
+}
+
+/// 弹出托盘菜单：按托盘事件自带的图标矩形定位（零插件依赖），推送最新岛可见性
+/// 后显示并聚焦（B1 焦点策略：用户点击托盘属预期交互；失焦即收，见 setup 的
+/// Focused 事件与菜单页 Esc）。已可见时再点右键 = 重新定位并保持
+fn show_tray_menu(app: &tauri::AppHandle, rect: tauri::Rect) {
+    let Some(win) = app.get_webview_window("tray-menu") else {
+        log::debug!("[托盘] 菜单窗口不存在，右键无效果");
+        return;
+    };
+    let Ok(size) = win.outer_size() else {
+        return;
+    };
+    // 事件矩形为物理坐标（Position/Size 枚举的 Physical 分支原样返回）
+    let rpos = rect.position.to_physical(1.0);
+    let rsize = rect.size.to_physical::<u32>(1.0);
+    let center = (
+        rpos.x as f64 + rsize.width as f64 / 2.0,
+        rpos.y as f64 + rsize.height as f64 / 2.0,
+    );
+    let Some(mon) = monitor_at(app, center) else {
+        return;
+    };
+    let mp = mon.position();
+    let ms = mon.size();
+    let pos = tray_menu_pos(
+        (rpos.x, rpos.y, rsize.width as i32, rsize.height as i32),
+        (size.width as i32, size.height as i32),
+        (mp.x, mp.y, ms.width as i32, ms.height as i32),
+        8,
+    );
+    let _ = win.set_position(tauri::PhysicalPosition::new(pos.0, pos.1));
+    // 推送最新岛可见性（菜单项文案/徽标用）：弹出时刻的快照比菜单页内存态可靠；
+    // 附带的 show 事件同时驱动前端重放入场动画
+    let island_visible = app
+        .get_webview_window(ISLAND)
+        .is_some_and(|w| w.is_visible().unwrap_or(true));
+    let _ = app.emit_to(
+        "tray-menu",
+        "tray-menu-show",
+        serde_json::json!({ "island_visible": island_visible }),
+    );
+    let _ = (win.show(), win.set_focus());
+    log::debug!("[托盘] 菜单弹出：落点 {:?}", pos);
+}
+
+/// 系统托盘：常驻核心。左键动作由设置项 tray_left_action 决定（默认无操作，
+/// 选择权交给用户），右键恒为弹出 webview 自绘托盘菜单；双击不响应（单击/双击
+/// 消歧需要延迟等待，单击手感变钝，已与所有者确认放弃双击）。
+/// 事件回调转后台线程执行：与旧 on_menu_event 同款主线程减负（内含 SQLite 读）
 fn build_tray(app: &tauri::App) -> anyhow::Result<()> {
-    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-    use tauri::tray::TrayIconBuilder;
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    let toggle = MenuItem::with_id(app, "toggle", "隐藏", true, None::<&str>)?;
-    let sep_island = PredefinedMenuItem::separator(app)?;
-    let report = MenuItem::with_id(app, "report", "报表", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
-    let about = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
-    let sep_quit = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[&toggle, &sep_island, &report, &settings, &about, &sep_quit, &quit],
-    )?;
     TrayIconBuilder::with_id("at-tray")
         .tooltip("去你的岛 · AgentTrackerIsland")
         .icon(app.default_window_icon().expect("应用图标").clone())
-        .menu(&menu)
-        .on_menu_event(|app, ev| match ev.id.as_ref() {
-            "quit" => app.exit(0),
-            // 除"退出"外的菜单动作转后台线程执行：菜单回调跑在主线程事件循环内，
-            // 回调内的同步等待（getter/set_text 应答、SQLite 读等）会阻塞 UI 分发，
-            // 转线程是主线程减负的卫生习惯。注：2026-09-18"托盘显示灵动岛卡死"
-            // 的真因是 peek_apply/apply_snap 持 motion 锁调用 refresh_toggle_text
-            // 自锁（已修，见函数尾部注释），与本转线程无因果
-            other => {
-                let app = app.clone();
-                let id = other.to_string();
-                std::thread::spawn(move || match id.as_str() {
-                    "toggle" => {
-                        toggle_island(&app);
-                        refresh_toggle_text(&app);
-                    }
-                    "report" => show_aux_window(&app, "report"),
-                    "settings" => show_aux_window(&app, "settings"),
-                    "about" => show_aux_window(&app, "about"),
-                    _ => {}
-                });
+        .on_tray_icon_event(|tray, ev| {
+            // 只认"松开"的 Click：按住即弹会让菜单出现在按压期间；DoubleClick/
+            // Enter/Move 一律忽略。事件自带图标矩形（rect），定位零插件依赖
+            let TrayIconEvent::Click { rect, button, button_state, .. } = ev else {
+                return;
+            };
+            if button_state != MouseButtonState::Up {
+                return;
             }
+            let app = tray.app_handle().clone();
+            std::thread::spawn(move || match button {
+                MouseButton::Left => {
+                    let store = app.state::<Arc<Store>>();
+                    match tray_left_action(&store) {
+                        "toggle" => toggle_island(&app),
+                        "menu" => show_tray_menu(&app, rect),
+                        _ => {} // none：无操作（默认档）
+                    }
+                }
+                MouseButton::Right => show_tray_menu(&app, rect),
+                _ => {}
+            });
         })
         .build(app)?;
-    // 菜单项句柄入全局状态（菜单点击只可能发生在 build_tray 之后，时序安全）；
-    // 再按启动态定初值文案——启动贴边恢复发生在 setup 更早处，此时 hidden 已就绪
-    app.manage(TrayToggle(toggle));
-    refresh_toggle_text(app.handle());
+    log::debug!("[托盘] 已注册（左键按设置项分发，右键自绘菜单）");
     Ok(())
 }
 
@@ -1122,8 +1220,9 @@ fn show_aux_window(app: &tauri::AppHandle, label: &str) {
 
 /// 托盘切换灵动岛显隐（"隐藏"=彻底消失，"显示"=临时召唤）。
 /// 贴边隐藏态的窗口仍在屏外"可见"（is_visible=true）——隐藏须连边缘标签一起
-/// 整窗 hide；显示则先亮胶囊（位置提醒），贴边停靠时滑回停靠位并通知前端
-/// 3s 后自动收起（前端持定时器，鼠标移入即取消，见 App.tsx island-summon）
+/// 整窗 hide；显示则先在前端切好胶囊态再亮窗（顺序关键，见函数内注释），
+/// 贴边停靠时滑回停靠位并通知前端 3s 后自动收起（前端持定时器，鼠标移入即
+/// 取消，见 App.tsx island-summon）
 fn toggle_island(app: &tauri::AppHandle) {
     let Some(w) = app.get_webview_window(ISLAND) else {
         return;
@@ -1135,37 +1234,56 @@ fn toggle_island(app: &tauri::AppHandle) {
         }
         return;
     }
-    if let Err(e) = w.show() {
-        log::debug!("[岛] 托盘显示失败：{e}");
-        return;
-    }
     let motion = app.state::<Arc<Mutex<IslandMotion>>>();
     let edge = motion.lock().unwrap().edge.clone();
     if edge != "none" {
-        // 贴边停靠：滑回停靠位（胶囊态亮出位置），并广播"托盘召唤"给前端计时
+        // 贴边停靠：先切状态、后亮窗——peek_apply 把前端状态切成胶囊并开始
+        // 滑回停靠位时窗口仍隐藏，island-dock 事件先行到达，show() 亮出的首帧
+        // 即胶囊。若先 show 后切状态，首帧是旧状态（贴边标签）残影，闪现后才
+        // 跳成胶囊（2026-09-20 所有者实测反馈）
         let store = app.state::<Arc<Store>>();
         peek_apply(app, store.as_ref(), motion.inner(), false);
+        if let Err(e) = w.show() {
+            log::debug!("[岛] 托盘显示失败：{e}");
+            return;
+        }
+        // 广播"托盘召唤"给前端计时（3s 无操作自动收回，鼠标移入即取消）
         let _ = app.emit_to(ISLAND, "island-summon", ());
+    } else {
+        // edge=none 自由摆放：胶囊在原位直接出现，无自动收起
+        if let Err(e) = w.show() {
+            log::debug!("[岛] 托盘显示失败：{e}");
+        }
     }
-    // edge=none 自由摆放：胶囊在原位直接出现，无自动收起
 }
 
-/// 托盘"显示/隐藏"菜单项文案刷新：纯看窗口可见性——胶囊态与贴边标签态都算
-/// 可见（贴边隐藏的窗口仍在屏外 visible，标签还占着屏幕边缘），仅整窗 hide
-/// 后才显示"显示"。托盘未建好时（try_state 落空）静默跳过。
-/// ⚠ 历史教训：旧版会 lock motion，曾被 peek_apply 在持 motion 锁的作用域内
-/// 调用（MutexGuard 活到函数末尾），非重入互斥量同线程自锁致全 UI 冻结——
-/// 调用方须始终在 motion 锁外调用本函数
-fn refresh_toggle_text(app: &tauri::AppHandle) {
-    let Some(item) = app.try_state::<TrayToggle>() else {
-        return;
-    };
-    let visible = app
-        .get_webview_window(ISLAND)
-        .is_some_and(|w| w.is_visible().unwrap_or(true));
-    let text = if visible { "隐藏" } else { "显示" };
-    if let Err(e) = item.0.set_text(text) {
-        log::debug!("[托盘] 菜单文案更新失败：{e}");
+/// 托盘菜单动作分发（webview 菜单项 → Rust）：白名单枚举，全部复用托盘旧有
+/// 动作逻辑——岛显隐 toggle_island、开窗 show_aux_window、退出 app.exit。
+/// toggle 转后台线程：与旧菜单回调同款主线程减负（内部可能触发滑动动画与 SQLite 读）
+#[tauri::command]
+fn tray_menu_action(app: tauri::AppHandle, action: String) -> Result<(), String> {
+    match action.as_str() {
+        "toggle" => {
+            std::thread::spawn(move || toggle_island(&app));
+            Ok(())
+        }
+        "report" => {
+            show_aux_window(&app, "report");
+            Ok(())
+        }
+        "settings" => {
+            show_aux_window(&app, "settings");
+            Ok(())
+        }
+        "about" => {
+            show_aux_window(&app, "about");
+            Ok(())
+        }
+        "quit" => {
+            app.exit(0);
+            Ok(())
+        }
+        _ => Err(format!("未知托盘菜单动作：{action}")),
     }
 }
 
@@ -1244,5 +1362,40 @@ mod tests {
         assert_eq!(island_width(1920), 576);
         assert_eq!(island_width(2560), 768);
         assert_eq!(island_width(3840), 800); // 大屏封顶
+    }
+
+    /// 托盘菜单落点：任务栏四方位向屏内弹出，越界夹取进显示器
+    #[test]
+    fn test_tray_menu_pos() {
+        let mon = (0, 0, 1920, 1080);
+        let menu = (280, 300);
+        let gap = 8;
+        // 底部任务栏（图标居中）：向上弹，水平中心对齐图标中心
+        assert_eq!(
+            tray_menu_pos((960, 1040, 32, 32), menu, mon, gap),
+            (976 - 140, 1040 - gap - 300)
+        );
+        // 顶部任务栏：向下弹
+        assert_eq!(
+            tray_menu_pos((960, 8, 32, 32), menu, mon, gap),
+            (976 - 140, 8 + 32 + gap)
+        );
+        // 左侧任务栏：向右弹，垂直中心对齐
+        assert_eq!(
+            tray_menu_pos((8, 520, 32, 32), menu, mon, gap),
+            (8 + 32 + gap, 536 - 150)
+        );
+        // 右侧任务栏：向左弹
+        assert_eq!(
+            tray_menu_pos((1880, 520, 32, 32), menu, mon, gap),
+            (1880 - gap - 280, 536 - 150)
+        );
+        // 底任务栏右端图标：水平越界被夹取进屏幕右缘（db=dr 平局时底优先）
+        let (x, y) = tray_menu_pos((1880, 1040, 32, 32), menu, mon, gap);
+        assert_eq!(x, 1920 - 280);
+        assert_eq!(y, 1040 - gap - 300);
+        // 矮屏兜底：垂直放不下时夹取到屏幕顶
+        let (_, y) = tray_menu_pos((960, 260, 32, 32), menu, (0, 0, 1920, 300), gap);
+        assert_eq!(y, 0);
     }
 }

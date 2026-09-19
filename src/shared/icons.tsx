@@ -65,3 +65,42 @@ export function ReportIcon() {
     </svg>
   );
 }
+
+/** 胶囊（灵动岛显隐切换项）：横向圆角胶囊即岛的收缩态形态 */
+export function IslandIcon() {
+  return (
+    <svg {...BASE} className="ico">
+      <rect x="3" y="8" width="18" height="8" rx="4" />
+    </svg>
+  );
+}
+
+/** 齿轮（设置入口）：中圈 + 六向齿，线性小尺寸下比实心齿圈更清晰 */
+export function GearIcon() {
+  return (
+    <svg {...BASE} className="ico">
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M12 2.8v3M12 18.2v3M2.8 12h3M18.2 12h3M5.2 5.2l2.1 2.1M16.7 16.7l2.1 2.1M18.8 5.2l-2.1 2.1M7.3 16.7l-2.1 2.1" />
+    </svg>
+  );
+}
+
+/** 信息圈（关于入口） */
+export function InfoIcon() {
+  return (
+    <svg {...BASE} className="ico">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8v.5" />
+    </svg>
+  );
+}
+
+/** 电源（退出）：竖线 + 开口圆弧 */
+export function PowerIcon() {
+  return (
+    <svg {...BASE} className="ico">
+      <path d="M12 3v8" />
+      <path d="M6.3 6.5a8 8 0 1 0 11.4 0" />
+    </svg>
+  );
+}
