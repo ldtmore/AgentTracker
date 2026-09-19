@@ -208,7 +208,11 @@ function QuotaChip({
       <span className="quota-chip">
         <span className="quota-label">{label}</span>
         <div className="quota-bar">
-          <div className={`quota-fill fill-${level}`} style={{ width: `${pct}%` }} />
+          {/* scaleX（合成器属性）替代 width（布局属性）：变化平滑且不触发布局重排 */}
+          <div
+            className={`quota-fill fill-${level}`}
+            style={{ transform: `scaleX(${pct / 100})` }}
+          />
         </div>
         <span className={`quota-pct text-${level}`}>
           {usedPercent != null ? `${Math.round(pct)}%` : "--"}

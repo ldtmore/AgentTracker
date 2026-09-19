@@ -46,6 +46,14 @@ fn island_width(mon_logical_w: i32) -> i32 {
         .clamp(ISLAND_W_MIN, ISLAND_W_MAX)
 }
 
+/// 顶部贴边隐藏态宽度：胶囊公式的常数全部减半（比例/上下限各取 1/2），
+/// 与胶囊恒保持 2:1——任意屏幕上"窄标签 → 全宽胶囊"的生长比例一致。
+/// 1366→205 / 1920→288 / 2560→384 / ≥2667→400；经 island_metrics 下发前端渲染
+fn peek_top_width(mon_logical_w: i32) -> i32 {
+    ((mon_logical_w as f64 * ISLAND_W_RATIO * 0.5).round() as i32)
+        .clamp(ISLAND_W_MIN / 2, ISLAND_W_MAX / 2)
+}
+
 /// 岛的运动/贴边状态（内存态，setup 时创建并全局共享；位置与开关持久化在 app_settings）
 #[derive(Default)]
 struct IslandMotion {
@@ -63,7 +71,7 @@ struct IslandMotion {
     hidden: bool,
 }
 
-/// 动画标记超时：超过该时长仍未等到落点 Moved 事件则自复位（正常动画约 130~200ms）
+/// 动画标记超时：超过该时长仍未等到落点 Moved 事件则自复位（正常动画约 160~240ms）
 const ANIM_TIMEOUT_MS: u128 = 400;
 
 /// 滑动动画代数：每次新滑动/用户拖拽都递增，使旧动画线程自行退出
@@ -362,6 +370,8 @@ struct IslandMetrics {
     width: i32,
     collapsed_h: i32,
     expanded_h: i32,
+    /// 顶部贴边隐藏态宽度（peek_top_width：胶囊常数减半，恒 2:1）
+    peek_top_w: i32,
 }
 
 /// 查询岛自适应尺寸（基于岛窗口当前所在显示器的逻辑宽度）
@@ -373,6 +383,7 @@ fn island_metrics(win: tauri::WebviewWindow) -> Option<IslandMetrics> {
         width: island_width(ml.2),
         collapsed_h: ISLAND_H,
         expanded_h: ISLAND_EXPANDED_H,
+        peek_top_w: peek_top_width(ml.2),
     })
 }
 
@@ -526,16 +537,31 @@ fn hidden_pos(
     }
 }
 
-/// 程序化滑动窗口到位（to 为逻辑坐标；steps=1 即瞬时跳变；8~10 步约 130~200ms 动效）。
-/// 动画期间产生的 Moved 事件由 IslandMotion.animating 屏蔽，落点由 programmed 消费，
-/// 防止"移动 → Moved → 再评估 → 再移动"的自触发循环；落点事件意外丢失时
-/// 由 Moved 处理器按超时自复位（审查 3.7：去掉独立兜底线程）
+/// 滑动模式：Jump = 瞬时跳变（启动定位/启动恢复）；Out/In = 时长化缓动（毫秒）。
+/// 显示/吸附用 Out（ease-out cubic，减速进场），隐藏用 In（ease-in cubic，加速离场）——
+/// 不对称缓动：进场从容、离场干脆，观感更精致
+enum Slide {
+    Jump,
+    Out(u64),
+    In(u64),
+}
+
+/// 滑入（显示/吸附落位）时长：减速进场
+const SLIDE_SHOW_MS: u64 = 220;
+/// 滑出（隐藏）时长：加速离场
+const SLIDE_HIDE_MS: u64 = 160;
+
+/// 程序化滑动窗口到位（to 为逻辑坐标）。动画期间产生的 Moved 事件由
+/// IslandMotion.animating 屏蔽，落点由 programmed 消费，防止"移动 → Moved →
+/// 再评估 → 再移动"的自触发循环；落点事件意外丢失时由 Moved 处理器按超时
+/// 自复位（审查 3.7：去掉独立兜底线程）。按 16ms 步进插值缓动曲线，
+/// 末步恰为落点（缓动函数 f(1)=1），保证 Moved 落点消费判定不受缓动影响
 fn slide_to(
     win: &tauri::WebviewWindow,
     to: (i32, i32),
     scale: f64,
     motion: &Arc<Mutex<IslandMotion>>,
-    steps: i32,
+    anim: Slide,
 ) {
     let Ok(from_phys) = win.outer_position() else {
         return;
@@ -551,19 +577,28 @@ fn slide_to(
         m.animating = Some((std::time::Instant::now(), to_phys));
         m.programmed = Some(to_phys);
     }
+    // 时长 → 步数（16ms 一步，至少 2 步保证缓动曲线有中间帧；Jump 恒 1 步线性直达）
+    let (steps, dur_ms, ease_in) = match anim {
+        Slide::Jump => (1u64, 0u64, false),
+        Slide::Out(ms) => ((ms / 16).max(2), ms, false),
+        Slide::In(ms) => ((ms / 16).max(2), ms, true),
+    };
     let win = win.clone();
     std::thread::spawn(move || {
-        let steps = steps.max(1);
         for i in 1..=steps {
             if SLIDE_GEN.load(Ordering::Relaxed) != gen {
                 return; // 被更新的滑动/用户拖拽取代
             }
+            // 缓动插值：ease-in cubic（t³，起步慢加速离场）/ ease-out cubic（1−(1−t)³，进场减速）
             let t = i as f64 / steps as f64;
-            let lx = from.0 + ((to.0 - from.0) as f64 * t).round() as i32;
-            let ly = from.1 + ((to.1 - from.1) as f64 * t).round() as i32;
+            let e = if ease_in { t * t * t } else { 1.0 - (1.0 - t).powi(3) };
+            let lx = from.0 + ((to.0 - from.0) as f64 * e).round() as i32;
+            let ly = from.1 + ((to.1 - from.1) as f64 * e).round() as i32;
             let phys = logical_to_phys((lx, ly), scale);
             let _ = win.set_position(tauri::PhysicalPosition::new(phys.0, phys.1));
-            std::thread::sleep(Duration::from_millis(16));
+            if i < steps && dur_ms > 0 {
+                std::thread::sleep(Duration::from_millis(dur_ms / steps as u64));
+            }
         }
     });
 }
@@ -603,8 +638,20 @@ fn peek_apply(
         let mut m = motion.lock().unwrap();
         m.hidden = hide;
     }
+    // 滑入显示：立即解除鼠标穿透（看护线程的按光标启停是 90ms 粒度，这里必须同步做，
+    // 否则滑入后的胶囊最长 90ms 收不到悬停）；滑出隐藏交给看护线程按光标位置接管
+    if !hide {
+        let _ = win.set_ignore_cursor_events(false);
+    }
     let scale = mon.scale_factor();
-    slide_to(&win, to, scale, motion, 8);
+    // 隐藏加速离场（In），显示减速进场（Out）
+    slide_to(
+        &win,
+        to,
+        scale,
+        motion,
+        if hide { Slide::In(SLIDE_HIDE_MS) } else { Slide::Out(SLIDE_SHOW_MS) },
+    );
     log::debug!(
         "[岛] {}：edge={} 落点 {:?}",
         if hide { "滑出隐藏" } else { "滑回显示" },
@@ -683,7 +730,14 @@ fn apply_snap(
     } else {
         docked
     };
-    slide_to(&win, to, scale, motion, 8);
+    // 拖放吸附与 peek 同一套缓动语言：隐藏加速离场，落位减速进场
+    slide_to(
+        &win,
+        to,
+        scale,
+        motion,
+        if hide { Slide::In(SLIDE_HIDE_MS) } else { Slide::Out(SLIDE_SHOW_MS) },
+    );
     // 状态迁移留痕（排障主线索："岛不贴边/位置不对/消失"靠它重建时间线）
     log::debug!("[岛] 拖放吸附：edge={} hidden={} 落点 {:?}", edge, hide, to);
     // 先取值再放锁再广播：MutexGuard 实现 Drop 会活到函数末尾，持锁调用任何
@@ -706,6 +760,47 @@ fn lbutton_down() -> bool {
     // SAFETY:GetAsyncKeyState 仅查询系统全局按键状态，无指针/生命周期风险；
     // 返回值短时置位语义与本用途（按住检测）兼容
     unsafe { GetAsyncKeyState(VK_LBUTTON.0.into()) as u16 & 0x8000 != 0 }
+}
+
+/// 光标是否落在顶部隐藏态标签矩形内（窗口内水平居中、底部 PEEK_TOP_H 逻辑像素）。
+/// 看护线程 90ms 一次调停穿透开关的依据；窗口不缩窄（缩窗会触发 WebView2 重布局
+/// 拉伸伪影，且宽窄跳变与 Moved 防误判协议互相干扰），改由穿透实现"窄标签"语义：
+/// 穿透时两侧透明区域把点击还给下层窗口，光标进标签才解除（悬停区=可见区）
+fn cursor_on_top_tab(win: &tauri::WebviewWindow) -> bool {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let Ok(Some(mon)) = win.current_monitor() else {
+        return false;
+    };
+    let Ok(p) = win.outer_position() else {
+        return false;
+    };
+    let s = mon.scale_factor();
+    let ml_w = monitor_logical(&mon).2;
+    let w = island_width(ml_w) as f64;
+    let pw = peek_top_width(ml_w) as f64;
+    // 标签矩形（物理像素）：水平居中（窗口恒全宽，标签中心与胶囊中心天然对齐）、贴窗口底
+    let x0 = p.x as f64 + (w - pw) / 2.0 * s;
+    let y0 = p.y as f64 + (ISLAND_H - PEEK_TOP_H) as f64 * s;
+    let y1 = p.y as f64 + ISLAND_H as f64 * s;
+    let mut pt = POINT::default();
+    // SAFETY:GetCursorPos 仅查询系统全局光标坐标，无指针/生命周期风险
+    if unsafe { GetCursorPos(&mut pt) }.is_err() {
+        return false;
+    }
+    let (px, py) = (pt.x as f64, pt.y as f64);
+    px >= x0 && px < x0 + pw * s && py >= y0 && py < y1
+}
+
+/// 切换岛窗口鼠标穿透。带状态缓存：期望与缓存一致时不发系统调用，
+/// 避免 90ms 看护节拍下重复 SetWindowLong；peek_apply 显示路径绕过缓存
+/// 直接解除后，此处下一轮比对会自动收敛（缓存与实际短暂失配无害）
+fn set_click_through(win: &tauri::WebviewWindow, on: bool, last: &mut bool) {
+    if on == *last {
+        return;
+    }
+    *last = on;
+    let _ = win.set_ignore_cursor_events(on);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -823,31 +918,49 @@ pub fn run() {
                 });
             }
 
-            // 贴靠看护线程：位置静默且左键释放（拖放完成）后评估吸附/隐藏
+            // 贴靠看护线程：位置静默且左键释放（拖放完成）后评估吸附/隐藏；
+            // 兼管顶部隐藏态的鼠标穿透调停（与防抖同频 90ms，开销为微秒级坐标查询）
             {
                 let motion2 = motion.clone();
                 let app2 = app.handle().clone();
                 let store2 = store.clone();
-                std::thread::spawn(move || loop {
-                    std::thread::sleep(Duration::from_millis(90));
-                    let fire = {
-                        let mut m = motion2.lock().unwrap();
-                        match m.pending.take() {
-                            Some((at, x, y))
-                                if at.elapsed().as_millis() >= DRAG_QUIET_MS
-                                    && !lbutton_down() =>
-                            {
-                                Some((x, y))
+                let win2 = win.clone();
+                std::thread::spawn(move || {
+                    // 穿透开关缓存：期望与缓存一致时不发系统调用（见 set_click_through）
+                    let mut last_ct = false;
+                    loop {
+                        std::thread::sleep(Duration::from_millis(90));
+                        let fire = {
+                            let mut m = motion2.lock().unwrap();
+                            match m.pending.take() {
+                                Some((at, x, y))
+                                    if at.elapsed().as_millis() >= DRAG_QUIET_MS
+                                        && !lbutton_down() =>
+                                {
+                                    Some((x, y))
+                                }
+                                Some(other) => {
+                                    m.pending = Some(other);
+                                    None
+                                }
+                                None => None,
                             }
-                            Some(other) => {
-                                m.pending = Some(other);
-                                None
-                            }
-                            None => None,
+                        };
+                        if let Some((x, y)) = fire {
+                            apply_snap(&app2, &store2, &motion2, (x, y));
                         }
-                    };
-                    if let Some((x, y)) = fire {
-                        apply_snap(&app2, &store2, &motion2, (x, y));
+                        // 顶部隐藏态：光标进标签矩形才解除穿透（悬停区=可见区），
+                        // 其余状态一律确保解除，防止拖离顶部后岛整体不可点
+                        let ct_want = {
+                            let m = motion2.lock().unwrap();
+                            m.edge == "top" && m.hidden
+                        };
+                        let ct_on = if ct_want {
+                            cursor_on_top_tab(&win2)
+                        } else {
+                            false
+                        };
+                        set_click_through(&win2, ct_on, &mut last_ct);
                     }
                 });
             }
@@ -866,7 +979,7 @@ pub fn run() {
                             hidden_pos((ml.0, ml.1), ml.2, &edge, docked, island_width(ml.2)),
                             mon.scale_factor(),
                             &motion,
-                            1,
+                            Slide::Jump,
                         );
                         // 同步内存隐藏态：否则 island_peek 会误判"未隐藏"，悬停滑入失效
                         motion.lock().unwrap().hidden = true;
@@ -939,7 +1052,7 @@ fn position_island(
         pos,
         if remembered.is_some() { "记忆坐标" } else { "默认居中" }
     );
-    slide_to(win, pos, mon.scale_factor(), motion, 1);
+    slide_to(win, pos, mon.scale_factor(), motion, Slide::Jump);
 }
 
 /// 托盘"灵动岛"菜单项句柄：窗口可见性变化后据此刷新菜单文案

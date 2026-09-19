@@ -76,10 +76,14 @@ function quotaTitle(snap: IslandSnapshot): string {
 export default function IslandBar({
   snap,
   thresholds,
+  enterEdge,
   onToggle,
 }: {
   snap: IslandSnapshot | null;
   thresholds: Thresholds;
+  /** 贴边隐藏态滑回显示时的贴边边（top/left/right）：触发"由远及近"入场动画，
+   *  决定缩放 origin 与位移方向；null = 无动画（自由悬浮/启动直显） */
+  enterEdge?: string | null;
   /** 悬停展开关闭时：点击胶囊切换信息卡片展开/收起 */
   onToggle?: () => void;
 }) {
@@ -127,9 +131,25 @@ export default function IslandBar({
     if (!wasDragging) onToggle?.();
   };
 
+  // 入场动画参数：origin 贴向停靠边、位移从边缘方向起始——顶部自上而下长出，
+  // 左右贴边从屏幕边缘探出，配合 Rust 缓动滑入即"由小变大、由远及近"
+  const enterStyle = enterEdge
+    ? ({
+        transformOrigin:
+          enterEdge === "top"
+            ? "50% 0%"
+            : enterEdge === "left"
+              ? "0% 50%"
+              : "100% 50%",
+        "--in-x": enterEdge === "top" ? "0px" : enterEdge === "left" ? "-10px" : "10px",
+        "--in-y": enterEdge === "top" ? "-12px" : "0px",
+      } as React.CSSProperties)
+    : undefined;
+
   return (
     <div
-      className={`island${onToggle ? " island-clickable" : ""}`}
+      className={`island${onToggle ? " island-clickable" : ""}${enterEdge ? " island-peek-in" : ""}`}
+      style={enterStyle}
       onMouseDown={onMouseDown}
       onMouseMove={onMouseMove}
       onMouseUp={onMouseUp}

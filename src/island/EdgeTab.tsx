@@ -47,10 +47,14 @@ export default function EdgeTab({
   edge,
   snap,
   thresholds,
+  peekW,
 }: {
   edge: string;
   snap: IslandSnapshot | null;
   thresholds: Thresholds;
+  /** 顶部贴边隐藏态的标签宽度（Rust peek_top_width：胶囊公式常数减半，恒 2:1）。
+   *  窗口保持全宽，标签以 CSS 居中呈现窄条；两侧透明区域由后端动态鼠标穿透放行点击 */
+  peekW: number;
 }) {
   const error = snap?.island === "any_error" || snap?.quota_exhausted === true;
   const cls = `edge-tab edge-tab-${edge}${error ? " edge-error" : ""}`;
@@ -62,10 +66,10 @@ export default function EdgeTab({
   const level = pct != null ? quotaLevel(pct, thresholds.warn, thresholds.danger) : "normal";
   const pctClamped = pct != null ? Math.min(100, Math.max(0, pct)) : 0;
 
-  // 顶部贴边：等宽横条，身份色填充，状态由亮度/动效表达
+  // 顶部贴边：等宽横条（宽 = peekW，居中呈现），身份色填充，状态由亮度/动效表达
   if (edge !== "left" && edge !== "right") {
     return (
-      <div className={cls} data-tauri-drag-region>
+      <div className={cls} style={{ width: peekW }} data-tauri-drag-region>
         {segments.map((seg) => (
           // 出错分段叠加"！"（E4）：纯色微 UI 上唯一的文字级符号
           <span key={seg.agent} className="edge-seg-wrap" data-tauri-drag-region>
@@ -82,10 +86,12 @@ export default function EdgeTab({
           </span>
         ))}
         {pct != null && (
+          // 额度发丝线走 scaleX（合成器属性）而非 width（布局属性）：
+          // 百分比变化时平滑生长，且不触发布局重排
           <span className="edge-quota-track">
             <span
               className={`edge-quota-fill fill-${level}`}
-              style={{ width: `${pctClamped}%` }}
+              style={{ transform: `scaleX(${pctClamped / 100})` }}
             />
           </span>
         )}
@@ -133,11 +139,12 @@ export default function EdgeTab({
         {pct != null && (
           <>
             <path d={arcPath} pathLength={100} className="edge-arc-track" />
+            {/* dasharray 经 style 下发（CSS 可观察）而非属性：用量变化时弧长平滑补间 */}
             <path
               d={arcPath}
               pathLength={100}
               className="edge-arc"
-              strokeDasharray={`${pctClamped} 100`}
+              style={{ strokeDasharray: `${pctClamped} 100` }}
               stroke={ARC_STROKE[level] ?? ARC_STROKE.normal}
             />
           </>

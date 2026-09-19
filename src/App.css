@@ -49,6 +49,18 @@
   --danger: #f87171;
   /* 开关关闭态轨道（比输入框底更实，避免看起来像没画） */
   --switch-off: rgba(255, 255, 255, 0.22);
+  /* 缓动令牌（2026-09-20 动效改造）：进场减速舒展、离场加速干脆，
+     与 Rust 侧 slide_to 的 cubic 缓动同一语言；逐帧动画只用 transform/opacity/clip-path */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.55, 0, 0.79, 0.36);
+  /* 等宽字体（模型名/数字）：此前 var(--mono, ...) 无定义源头，此处统一 */
+  --mono: "Cascadia Mono", Consolas, "Courier New", monospace;
+  /* 玻璃材质：顶部 1px 内高光 + 底部 1px 内阴影，模拟受光面的立体感 */
+  --hl-top: rgba(255, 255, 255, 0.08);
+  --hl-bottom: rgba(0, 0, 0, 0.22);
+  /* 胶囊悬停罩层（opacity 过渡，不动背景本身）：深色提亮、浅色压暗 */
+  --veil-hover: rgba(255, 255, 255, 0.07);
+  --veil-active: rgba(0, 0, 0, 0.12);
 }
 
 /* 浅色色板：半透明面层改白系 RGB（alpha 与深色共用，随「背景不透明度」滑块统一调节），
@@ -79,6 +91,11 @@
   --accent: #059669;
   --danger: #dc2626;
   --switch-off: rgba(0, 0, 0, 0.2);
+  /* 浅色玻璃：高光近白（白底上仍可辨）、底部阴影减淡；罩层反向——黑系轻压暗 */
+  --hl-top: rgba(255, 255, 255, 0.9);
+  --hl-bottom: rgba(0, 0, 0, 0.07);
+  --veil-hover: rgba(0, 0, 0, 0.045);
+  --veil-active: rgba(0, 0, 0, 0.1);
 }
 
 /* 透明窗口：html/body 必须透明，形态由内部元素呈现 */
@@ -114,8 +131,37 @@ body,
   align-items: center;
   gap: 10px;
   padding: 0 18px;
-  background: rgba(var(--pill-rgb), var(--pill-alpha));
+  /* 玻璃材质：极缓纵向渐变（顶部略提亮）+ 上下 1px 内高光/内阴影，立体而不花哨 */
+  background: linear-gradient(
+    180deg,
+    rgba(var(--pill-rgb), calc(var(--pill-alpha) + 0.05)),
+    rgba(var(--pill-rgb), calc(var(--pill-alpha) - 0.02))
+  );
+  box-shadow: inset 0 1px 0 var(--hl-top), inset 0 -1px 0 var(--hl-bottom);
   border: 1px solid var(--border);
+  position: relative; /* 悬停/按压罩层 ::before 的定位基准 */
+}
+
+/* 悬停/按压罩层：只动 ::before 的 opacity（合成器属性），不改胶囊背景本身 */
+.island::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--veil-hover);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.island:hover::before {
+  opacity: 1;
+}
+
+/* 按压反馈：罩层瞬时换深色（背景切换不经过渡，按压要干脆） */
+.island:active::before {
+  opacity: 1;
+  background: var(--veil-active);
 }
 
 .island > * {
@@ -127,12 +173,41 @@ body,
   cursor: pointer;
 }
 
+/* 「由远及近」入场（2026-09-20）：贴边隐藏态滑回时，胶囊从标签大小沿停靠边
+   长出——只动 transform/opacity（合成器属性），origin 与位移方向由 JS 按边注入；
+   与 Rust 滑入缓动（ease-out 220ms）同步起播，观感为同一个动作 */
+.island-peek-in {
+  animation: island-in 240ms var(--ease-out) backwards;
+}
+
+@keyframes island-in {
+  from {
+    opacity: 0;
+    transform: translate(var(--in-x, 0px), var(--in-y, -12px)) scale(0.6);
+  }
+}
+
+/* 入场时正文延迟淡入（backwards = 延迟期不可见）：避免缩放中途文字被压扁的观感，
+   状态灯即时出现充当"种子"，文字随后浮现 */
+.island-peek-in .island-text,
+.island-peek-in .island-quota,
+.island-peek-in .island-tokens {
+  animation: peek-text-in 160ms ease-out 100ms backwards;
+}
+
+@keyframes peek-text-in {
+  from {
+    opacity: 0;
+  }
+}
+
 /* 状态灯（语义色，双主题通用） */
 .dot {
   width: 10px;
   height: 10px;
   border-radius: 50%;
   flex: none;
+  position: relative; /* 出错波纹 ::after 的定位基准 */
 }
 
 .dot-green {
@@ -186,6 +261,30 @@ body,
   animation: pulse 0.9s ease-in-out infinite;
 }
 
+/* 出错雷达波纹（2026-09-20）：伪元素圆环 scale+opacity 扩散（合成器属性，
+   不动画 box-shadow——那会逐帧重绘）；与 .pulse 的本体闪烁叠加，远看有"扩散感" */
+.dot-red.pulse::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1px solid #f87171;
+  opacity: 0;
+  animation: ripple 1.4s ease-out infinite;
+}
+
+@keyframes ripple {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.7;
+  }
+  70%,
+  100% {
+    transform: scale(1.9);
+    opacity: 0;
+  }
+}
+
 .island-text {
   flex: 1;
   white-space: nowrap;
@@ -197,6 +296,7 @@ body,
   flex: none;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+  transition: color 0.2s ease; /* 额度档位变色时平滑过渡，不生硬跳色 */
 }
 
 .island-quota.quota-warn {
@@ -256,12 +356,56 @@ body,
   height: auto; /* 高度由内容决定（窗口高度由 App.tsx 按此内容量调定） */
   max-height: 100%; /* 被窗口钳制时封顶，会话区转为内部滚动 */
   border-radius: 16px;
-  background: rgba(var(--panel-rgb), var(--panel-alpha));
+  /* 与胶囊同一套玻璃材质（面板用 --panel 变量，实一档） */
+  background: linear-gradient(
+    180deg,
+    rgba(var(--panel-rgb), calc(var(--panel-alpha) + 0.04)),
+    rgba(var(--panel-rgb), calc(var(--panel-alpha) - 0.01))
+  );
+  box-shadow: inset 0 1px 0 var(--hl-top), inset 0 -1px 0 var(--hl-bottom);
   border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 12px 14px;
   gap: 8px;
+}
+
+/* 面板进出场（2026-09-20 动效改造）：窗口高度一次性到位/保留，
+   视觉上的展开收拢全部由内容完成——clip-path 自胶囊下缘向下展开 +
+   轻微下落位移 + 淡入；只动合成器属性，translateY 不影响 Panel 的
+   getBoundingClientRect 高度测量（reportHeight 链路零干扰） */
+.panel-enter {
+  animation: panel-in 220ms var(--ease-out) backwards;
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: none;
+  }
+}
+
+.panel-exit {
+  animation: panel-out 160ms var(--ease-in) forwards;
+}
+
+@keyframes panel-out {
+  from {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    clip-path: inset(0 0 100% 0);
+    transform: translateY(-8px);
+  }
 }
 
 .panel-title {
@@ -588,8 +732,10 @@ body,
 
 .quota-fill {
   height: 100%;
+  width: 100%; /* 宽度恒满，用量比例由 transform: scaleX 表达（JS 注入） */
   border-radius: 4px;
-  transition: width 0.6s ease;
+  transform-origin: left center; /* 从左端向右生长 */
+  transition: transform 0.6s var(--ease-out);
 }
 
 .fill-normal {
@@ -643,10 +789,20 @@ body,
      在圆角外沿形成"发虚的直角" */
   box-shadow: inset 0 0 8px var(--edge-shadow);
   cursor: pointer;
-  transition: filter 0.15s ease, border-color 0.15s ease;
+  /* 挂载即淡显（滑出隐藏的滑动过程中标签随之浮现，替代生硬的内容切换）；
+     hover 探出走 transform（合成器属性） */
+  animation: edge-in 180ms var(--ease-out) backwards;
+  transition: filter 0.15s ease, border-color 0.15s ease,
+    transform 0.18s var(--ease-out);
 }
 
-/* 悬停提亮（标签本身的微交互反馈） */
+@keyframes edge-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 悬停反馈 = 提亮 + 向屏幕外"探出" 2px（transform 不动布局，且暗示可交互） */
 .edge-tab:hover {
   filter: brightness(1.35);
 }
@@ -666,16 +822,31 @@ body,
   box-shadow: inset 0 0 8px rgba(248, 113, 113, 0.35);
 }
 
-/* 顶部贴边：胶囊底部约 1/5 的短条（高与 Rust PEEK_TOP_H 对应，占满窗口宽）；
-   分段横切，段间 1px 深缝分隔 */
+/* 顶部贴边：窄标签（宽 = peek_top_width，JS 内联注入；高与 Rust PEEK_TOP_H 对应）。
+   窗口保持全宽，标签水平居中——与隐藏态下方的胶囊中心严格对齐，
+   生长动画的比例关系（恒 2:1）在任何屏幕上一致；分段横切，段间 1px 深缝分隔 */
 .edge-tab-top {
-  left: 0;
-  right: 0;
+  left: 50%;
   bottom: 0;
   height: 14px;
+  transform: translateX(-50%);
   border-radius: 0 0 16px 16px;
   border-top: none;
   gap: 1px;
+}
+
+/* 悬停探出：顶部向下伸 2px（与容器的居中位移叠加） */
+.edge-tab-top:hover {
+  transform: translateX(-50%) translateY(2px);
+}
+
+/* 左右贴边悬停：向屏幕内探出 2px */
+.edge-tab-left:hover {
+  transform: translateX(2px);
+}
+
+.edge-tab-right:hover {
+  transform: translateX(-2px);
 }
 
 /* 左贴边：半椭圆 D 形，窗口右缘伸入屏幕（与 Rust PEEK_SIDE_W 对应）。
@@ -798,7 +969,10 @@ body,
 
 .edge-quota-fill {
   height: 100%;
+  width: 100%; /* 宽度恒满，用量比例由 transform: scaleX 表达（JS 注入） */
   border-radius: 0 1px 1px 0;
+  transform-origin: left center; /* 从左端向右生长 */
+  transition: transform 0.3s var(--ease-out);
 }
 
 /* 左右贴边：SVG 扇形楔形（从圆心辐射等角切分；区域小不放文字，详情由滑入后的胶囊承接）。
@@ -849,10 +1023,24 @@ body,
   fill: none;
   stroke-width: 3;
   stroke-linecap: butt;
+  transition: stroke-dasharray 0.3s var(--ease-out); /* 弧长随用量平滑补间（dasharray 经 style 注入） */
 }
 
 .edge-arc-track {
   fill: none;
   stroke: var(--arc-track);
   stroke-width: 3;
+}
+
+/* ===== 无障碍（宪法红线⑤延伸）：系统开启"减弱动态效果"时，全部动效立即收束 =====
+   循环动画（呼吸/快闪/波纹）收敛为单帧静止，过渡与入场动画压到近似瞬时；
+   只影响时长与次数，不改变最终视觉状态（位置/透明度落点不变） */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

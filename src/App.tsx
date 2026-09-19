@@ -32,8 +32,15 @@ interface IslandMetrics {
   width: number;
   collapsed_h: number;
   expanded_h: number;
+  /** 顶部贴边隐藏态宽度（胶囊公式常数减半，恒 2:1） */
+  peek_top_w: number;
 }
-const DEFAULT_METRICS: IslandMetrics = { width: 360, collapsed_h: 48, expanded_h: 520 };
+const DEFAULT_METRICS: IslandMetrics = {
+  width: 360,
+  collapsed_h: 48,
+  expanded_h: 520,
+  peek_top_w: 288,
+};
 
 /** 面板与胶囊的间距（与 App.css .panel-wrap 的 margin-top 保持一致） */
 const PANEL_GAP_PX = 6;
@@ -56,8 +63,14 @@ function IslandApp() {
   useTheme();
   const [snap, setSnap] = useState<IslandSnapshot | null>(null);
   const [expanded, setExpanded] = useState(false);
+  // 面板动画相位：in=挂载且入场中/展开，out=退场动画在播，null=未挂载。
+  // 退场必须等动画播完才卸载并缩窗——窗口先缩会拦腰截断动画
+  const [panelPhase, setPanelPhase] = useState<"in" | "out" | null>(null);
   // 面板内容自然高度（Panel 上报）：展开高度自适应的依据，null = 未测得
   const [panelH, setPanelH] = useState<number | null>(null);
+  // 胶囊"由远及近"入场：隐藏态滑回显示的瞬间置为贴边边（决定动画 origin 与位移方向）
+  const [peekEnter, setPeekEnter] = useState<string | null>(null);
+  const prevHiddenRef = useRef(false);
   // 上次实际下发的窗口高度（防循环护栏：观察器→setSize→resize→观察器）
   const lastSetH = useRef<number>(0);
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
@@ -193,6 +206,21 @@ function IslandApp() {
     };
   }, []);
 
+  // 隐藏 → 显示的瞬间标记胶囊入场动画（悬停滑入与托盘召唤共用此链路）；
+  // prevHiddenRef 只在 dock 变化时推进，避免启动引导首次拉取误触发
+  useEffect(() => {
+    if (prevHiddenRef.current && !dock.hidden && dock.edge !== "none") {
+      setPeekEnter(dock.edge);
+    }
+    prevHiddenRef.current = dock.hidden;
+  }, [dock]);
+
+  // expanded 翻转映射到面板相位：展开即挂载入场；收起先进退场动画，播完自动卸载
+  useEffect(() => {
+    if (expanded) setPanelPhase("in");
+    else setPanelPhase((p) => (p === "in" ? "out" : p));
+  }, [expanded]);
+
   // 托盘"显示"召唤（island-summon）：贴边停靠的岛滑回后 3s 自动滑出收回——
   // 召唤是"临时亮位提醒"，无人理会就自己收好；鼠标移入则取消（交给常规
   // 移出滑出逻辑接管），期间被托盘隐藏或拖走也不动作
@@ -228,10 +256,13 @@ function IslandApp() {
   // 展开高度按面板内容自适应（2026-09-18 展示改造）：
   //   目标 = 胶囊 + 间距 + 面板自然高度，上限 expanded_h（超出面板内部滚动），
   //   下限 MIN_EXPANDED_H；未测得前回退 expanded_h（与历史行为一致，避免闪缩）。
+  // 收起时序（2026-09-20 动效改造）：面板退场动画在播（phase=out）时窗口保持
+  // 原高不动，动画播完卸载（phase=null）后才收缩——提前缩窗会拦腰截断动画。
   // 窗口必须跟随内容收缩：岛常驻顶层，若只缩内容不缩窗口，
   // 下方透明区域会拦截鼠标、挡住下层应用点击
   useEffect(() => {
-    if (!expanded && panelH != null) setPanelH(null); // 收起后清测量值，下次展开重新上报
+    if (panelPhase == null && panelH != null) setPanelH(null); // 面板卸载后清测量值，下次展开重新上报
+    if (!expanded && panelPhase != null) return; // 退场动画在播：窗口高度按兵不动
     const win = getCurrentWebviewWindow();
     const target = expanded
       ? Math.min(
@@ -247,7 +278,7 @@ function IslandApp() {
     win
       .setSize(new LogicalSize(metrics.width, target))
       .catch(() => {});
-  }, [expanded, metrics, panelH]);
+  }, [expanded, metrics, panelH, panelPhase]);
 
   // 进入贴边隐藏态时自动收起面板（Rust 已把窗口缩回收缩态，保持渲染一致）
   useEffect(() => {
@@ -291,19 +322,32 @@ function IslandApp() {
       }}
     >
       {dock.hidden && !expanded ? (
-        // 贴边隐藏态：独立信息标签（非胶囊截取）；面板收起完成后才渲染，避免错位闪现
-        <EdgeTab edge={dock.edge} snap={visibleSnap} thresholds={thresholds} />
+        // 贴边隐藏态：独立信息标签（非胶囊截取）；面板收起完成后才渲染，避免错位闪现。
+        // peekW：标签宽度（胶囊常数减半），窗口保持全宽，由 CSS 居中呈现窄标签
+        <EdgeTab
+          edge={dock.edge}
+          snap={visibleSnap}
+          thresholds={thresholds}
+          peekW={metrics.peek_top_w}
+        />
       ) : (
         <>
           <IslandBar
             snap={visibleSnap}
             thresholds={thresholds}
+            enterEdge={peekEnter}
             onToggle={hoverCard ? undefined : () => setExpanded((v) => !v)}
           />
-          {expanded && visibleSnap && (
+          {/* 面板挂载由相位驱动：in=入场/展开，out=退场动画在播（播完 onAnimationEnd 卸载） */}
+          {panelPhase && visibleSnap && (
             <div
-              className="panel-wrap"
+              className={`panel-wrap ${panelPhase === "in" ? "panel-enter" : "panel-exit"}`}
               style={{ maxHeight: metrics.expanded_h - metrics.collapsed_h - PANEL_GAP_PX }}
+              onAnimationEnd={(e) => {
+                if (e.target === e.currentTarget && panelPhase === "out") {
+                  setPanelPhase(null); // 退场播完才卸载，窗口高度 effect 随之收缩
+                }
+              }}
             >
               <Panel snap={visibleSnap} thresholds={thresholds} onNaturalHeight={setPanelH} />
             </div>
